@@ -4,138 +4,127 @@ import matplotlib.pyplot as plt
 import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential
-from keras.layers import Dense, LSTM
+from keras.layers import Dense, LSTM, Dropout
 from keras.callbacks import EarlyStopping
-from sklearn.metrics import mean_squared_error
 
-class StockPredictor:
-    def __init__(self, ticker):
-        self.ticker = ticker
-        self.data = None
-        self.scaled_data = None
-        self.scaler = None
-        self.training_data_len = None
-        self.model = None
-        self.start = None
-        self.end = None
+class Config:
+    hidden_size = 64  # LSTM hidden size, reduced for simpler learning
+    lstm_layers = 2    # Number of LSTM layers
+    dropout_rate = 0.2  # Reduced Dropout rate to avoid losing too much information
+    time_step = 90      # Time step adjusted slightly higher
+    batch_size = 32     # Lowered batch size for finer updates
+    learning_rate = 0.001
+    epoch = 50          # More epochs for better training
+    valid_data_rate = 0.2
+    random_seed = 42
 
-    # Method to load stock data
-    def load_stock_data(self, start='2010-01-01', end=None):
-        end = end or pd.Timestamp.now().strftime('%Y-%m-%d')  # Default end date is today
-        self.data = yf.download(self.ticker, start=start, end=end)[['Close']]
-    
-    # Method to preprocess data
-    def preprocess_data(self):
-        dataset = self.data.values
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-        self.scaled_data = self.scaler.fit_transform(dataset)
-        self.training_data_len = int(len(self.scaled_data) * 0.8)
-    
-    # Method to build and train the LSTM model
-    def build_and_train_model(self):
-        train_data = self.scaled_data[0:self.training_data_len, :]
-        x_train, y_train = [], []
-        
-        for i in range(60, len(train_data)):
-            x_train.append(train_data[i-60:i, 0])
-            y_train.append(train_data[i, 0])
-        
-        x_train, y_train = np.array(x_train), np.array(y_train)
-        x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
-        
-        # Build LSTM model
-        self.model = Sequential()
-        self.model.add(LSTM(128, return_sequences=True, input_shape=(x_train.shape[1], 1)))
-        self.model.add(LSTM(64, return_sequences=False))
-        self.model.add(Dense(25))
-        self.model.add(Dense(1))
-        
-        # Compile the model
-        self.model.compile(optimizer='adam', loss='mean_squared_error')
-        
-        # Early stopping
-        early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-        
-        self.model.fit(x_train, y_train, batch_size=1, epochs=1, callbacks=[early_stop])
-    
-    # Method to predict stock prices
-    def predict_prices(self):
-        test_data = self.scaled_data[self.training_data_len - 60:, :]
-        x_test, y_test = [], self.scaled_data[self.training_data_len:, :]
-        
-        for i in range(60, len(test_data)):
-            x_test.append(test_data[i-60:i, 0])
-        
-        x_test = np.array(x_test)
-        x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
-        
-        predictions = self.model.predict(x_test)
-        predictions = self.scaler.inverse_transform(predictions)
-        
-        return predictions, y_test
-    
-    # Method to calculate volatility
-    def calculate_volatility(self):
-        returns = self.data['Close'].pct_change().dropna()
-        volatility = returns.rolling(window=30).std()  # 30-day rolling volatility
-        return volatility
-    
-    # Method to select an optimal date range based on volatility
-    def select_optimal_date_range(self, volatility_threshold=0.02):
-        volatility = self.calculate_volatility()
-        high_vol_period = self.data[volatility > volatility_threshold]
-        
-        if len(high_vol_period) < 60:
-            self.start, self.end = self.data.index[0], self.data.index[-1]
-        else:
-            self.start, self.end = high_vol_period.index[0], high_vol_period.index[-1]
-    
-    # Method to plot predictions
-    def plot_predictions(self, predictions):
-        train = self.data[:self.training_data_len]
-        valid = self.data[self.training_data_len:]
-        valid['Predictions'] = predictions
-        
-        plt.figure(figsize=(16, 6))
-        plt.title('Model')
-        plt.xlabel('Date', fontsize=18)
-        plt.ylabel('Close Price USD ($)', fontsize=18)
-        plt.plot(train['Close'])
-        plt.plot(valid[['Close', 'Predictions']])
-        plt.legend(['Train', 'Val', 'Predictions'], loc='lower right')
-        plt.show()
+config = Config()
 
-    # Method to check for underfitting
-    def check_for_underfitting(self, predictions, true_values):
-        rmse = np.sqrt(mean_squared_error(true_values, predictions))
-        return rmse > 0.05  # If RMSE > 5%, consider it underfitting
+# Function to load stock data
+def load_stock_data(stock_ticker):
+    end = pd.Timestamp.now().strftime('%Y-%m-%d')
+    start = '2010-01-01'  # Start from a long range for optimal range selection
+    data = yf.download(stock_ticker, start=start, end=end)
+    return data[['Close']]
+
+# Preprocess the stock data for LSTM
+def preprocess_data(data):
+    dataset = data.values
+    scaler = MinMaxScaler(feature_range=(0, 1))  # Scaling to range (0, 1)
+    scaled_data = scaler.fit_transform(dataset)
+    return scaled_data, scaler
+
+# Build and train the LSTM model
+def build_and_train_model(scaled_data, training_data_len, config):
+    train_data = scaled_data[0:training_data_len, :]
     
-    # Method to start prediction with smart stopping and retraining
-    def predict_with_smart_stopping(self):
-        # Load initial stock data for default period (start='2010-01-01' and end='today')
-        self.load_stock_data()
-        
-        # Select optimal date range based on volatility
-        self.select_optimal_date_range()
-        
-        # Reload data with the selected start and end dates
-        self.load_stock_data(start=self.start, end=self.end)
-        
-        # Preprocess and train model
-        self.preprocess_data()
-        self.build_and_train_model()
-        
-        # Get predictions
-        predictions, y_test = self.predict_prices()
-        
-        # Check for underfitting
-        if self.check_for_underfitting(predictions, y_test):
-            print("Underfitting detected. Retraining with extended date range.")
-            self.select_optimal_date_range(volatility_threshold=0.015)
-            self.predict_with_smart_stopping()
-        else:
-            self.plot_predictions(predictions)
+    x_train = []
+    y_train = []
+    
+    for i in range(config.time_step, len(train_data)):
+        x_train.append(train_data[i - config.time_step:i, 0])
+        y_train.append(train_data[i, 0])
+    
+    x_train, y_train = np.array(x_train), np.array(y_train)
+    x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))  # Correct input shape for LSTM
+    
+    # Build LSTM model with reduced dropout
+    model = Sequential()
+    model.add(LSTM(config.hidden_size, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+    model.add(Dropout(config.dropout_rate))
+    
+    if config.lstm_layers > 1:
+        model.add(LSTM(config.hidden_size, return_sequences=False))
+        model.add(Dropout(config.dropout_rate))
+    
+    model.add(Dense(1))  # Output layer predicting 1 value
+    
+    # Compile the model
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    
+    # Early stopping to prevent overfitting
+    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    
+    # Train the model with validation split and early stopping
+    history = model.fit(x_train, y_train, batch_size=config.batch_size, epochs=config.epoch, validation_split=config.valid_data_rate, callbacks=[early_stop])
+    
+    # Plot training & validation loss
+    plt.plot(history.history['loss'], label='train_loss')
+    plt.plot(history.history['val_loss'], label='val_loss')
+    plt.title('Model Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.show()
+    
+    return model
+
+# Predict stock prices using the trained LSTM model
+def predict_stock_prices(model, scaled_data, training_data_len, scaler, config):
+    test_data = scaled_data[training_data_len - config.time_step:, :]
+    
+    x_test = []
+    
+    for i in range(config.time_step, len(test_data)):
+        x_test.append(test_data[i - config.time_step:i, 0])
+    
+    x_test = np.array(x_test)
+    x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))  # Correct shape for LSTM input
+    
+    predictions = model.predict(x_test)
+    predictions = scaler.inverse_transform(predictions)  # Convert back to original scale
+    
+    return predictions
+
+# Plot the predicted prices against the actual stock prices
+def plot_predictions(data, predictions, training_data_len):
+    train = data[:training_data_len]
+    valid = data[training_data_len:]
+    valid['Predictions'] = predictions
+    
+    plt.figure(figsize=(16, 6))
+    plt.title('Model Predictions vs Real Prices')
+    plt.xlabel('Date', fontsize=18)
+    plt.ylabel('Close Price USD ($)', fontsize=18)
+    plt.plot(train['Close'], label='Train Data')
+    plt.plot(valid['Close'], label='Actual Prices')
+    plt.plot(valid['Predictions'], label='Predicted Prices')
+    plt.legend()
+    plt.show()
+
+# Full workflow to predict stock prices using LSTM
+def predict_stock(stock_ticker):
+    data = load_stock_data(stock_ticker)
+    
+    scaled_data, scaler = preprocess_data(data)
+    
+    training_data_len = int(len(scaled_data) * (1 - config.valid_data_rate))  # 80% train, 20% validation
+    
+    model = build_and_train_model(scaled_data, training_data_len, config)
+    
+    predictions = predict_stock_prices(model, scaled_data, training_data_len, scaler, config)
+    
+    plot_predictions(data, predictions, training_data_len)
 
 # Example usage:
-# stock = StockPredictor('AAPL')
-# stock.predict_with_smart_stopping()
+predict_stock('AAPL')
