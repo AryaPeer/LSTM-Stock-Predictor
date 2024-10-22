@@ -3,139 +3,175 @@ import numpy as np
 import matplotlib.pyplot as plt
 import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
-from keras.models import Sequential
-from keras.layers import Dense, LSTM
-from keras.callbacks import EarlyStopping
-from sklearn.metrics import mean_squared_error
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, LSTM, Dropout, Bidirectional, Attention, Input, Flatten
+from tensorflow.keras.callbacks import EarlyStopping
+import ta 
+from sklearn.model_selection import TimeSeriesSplit
 
-class StockPredictor:
-    def __init__(self, ticker):
-        self.ticker = ticker
-        self.data = None
-        self.scaled_data = None
-        self.scaler = None
-        self.training_data_len = None
-        self.model = None
-        self.start = None
-        self.end = None
+# Configuration class with hyperparameters
+class Config:
+    hidden_size = 64  # LSTM hidden size
+    lstm_layers = 2    # Number of LSTM layers
+    dropout_rate = 0.2  # Dropout rate
+    time_step = 90      # Time step
+    batch_size = 32     # Batch size
+    learning_rate = 0.001
+    epoch = 25      # Number of epochs
+    valid_data_rate = 0.2
+    random_seed = 42
 
-    # Method to load stock data
-    def load_stock_data(self, start='2010-01-01', end=None):
-        end = end or pd.Timestamp.now().strftime('%Y-%m-%d')  # Default end date is today
-        self.data = yf.download(self.ticker, start=start, end=end)[['Close']]
-    
-    # Method to preprocess data
-    def preprocess_data(self):
-        dataset = self.data.values
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-        self.scaled_data = self.scaler.fit_transform(dataset)
-        self.training_data_len = int(len(self.scaled_data) * 0.8)
-    
-    # Method to build and train the LSTM model
-    def build_and_train_model(self):
-        train_data = self.scaled_data[0:self.training_data_len, :]
-        x_train, y_train = [], []
-        
-        for i in range(60, len(train_data)):
-            x_train.append(train_data[i-60:i, 0])
-            y_train.append(train_data[i, 0])
-        
-        x_train, y_train = np.array(x_train), np.array(y_train)
-        x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 1))
-        
-        # Build LSTM model
-        self.model = Sequential()
-        self.model.add(LSTM(128, return_sequences=True, input_shape=(x_train.shape[1], 1)))
-        self.model.add(LSTM(64, return_sequences=False))
-        self.model.add(Dense(25))
-        self.model.add(Dense(1))
-        
-        # Compile the model
-        self.model.compile(optimizer='adam', loss='mean_squared_error')
-        
-        # Early stopping
-        early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-        
-        self.model.fit(x_train, y_train, batch_size=1, epochs=1, callbacks=[early_stop])
-    
-    # Method to predict stock prices
-    def predict_prices(self):
-        test_data = self.scaled_data[self.training_data_len - 60:, :]
-        x_test, y_test = [], self.scaled_data[self.training_data_len:, :]
-        
-        for i in range(60, len(test_data)):
-            x_test.append(test_data[i-60:i, 0])
-        
-        x_test = np.array(x_test)
-        x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 1))
-        
-        predictions = self.model.predict(x_test)
-        predictions = self.scaler.inverse_transform(predictions)
-        
-        return predictions, y_test
-    
-    # Method to calculate volatility
-    def calculate_volatility(self):
-        returns = self.data['Close'].pct_change().dropna()
-        volatility = returns.rolling(window=30).std()  # 30-day rolling volatility
-        return volatility
-    
-    # Method to select an optimal date range based on volatility
-    def select_optimal_date_range(self, volatility_threshold=0.02):
-        volatility = self.calculate_volatility()
-        high_vol_period = self.data[volatility > volatility_threshold]
-        
-        if len(high_vol_period) < 60:
-            self.start, self.end = self.data.index[0], self.data.index[-1]
-        else:
-            self.start, self.end = high_vol_period.index[0], high_vol_period.index[-1]
-    
-    # Method to plot predictions
-    def plot_predictions(self, predictions):
-        train = self.data[:self.training_data_len]
-        valid = self.data[self.training_data_len:]
-        valid['Predictions'] = predictions
-        
-        plt.figure(figsize=(16, 6))
-        plt.title('Model')
-        plt.xlabel('Date', fontsize=18)
-        plt.ylabel('Close Price USD ($)', fontsize=18)
-        plt.plot(train['Close'])
-        plt.plot(valid[['Close', 'Predictions']])
-        plt.legend(['Train', 'Val', 'Predictions'], loc='lower right')
-        plt.show()
+config = Config()
 
-    # Method to check for underfitting
-    def check_for_underfitting(self, predictions, true_values):
-        rmse = np.sqrt(mean_squared_error(true_values, predictions))
-        return rmse > 0.05  # If RMSE > 5%, consider it underfitting
+# Function to load stock data with additional features
+def load_stock_data(stock_ticker):
+    end = pd.Timestamp.now().strftime('%Y-%m-%d')
+    data = yf.download(stock_ticker, start='2010-01-01', end=end)
+
+    # Calculate technical indicators
+    data['MA_20'] = data['Close'].rolling(window=20).mean()
+    data['EMA_20'] = data['Close'].ewm(span=20, adjust=False).mean()
+    data['RSI'] = ta.momentum.RSIIndicator(close=data['Close'], window=14).rsi()
+    data['MACD'] = ta.trend.MACD(close=data['Close']).macd()
+
+    # Drop NaN values generated by technical indicators
+    data.dropna(inplace=True)
+
+    # Include date features
+    data['DayOfWeek'] = data.index.dayofweek
+    data['DayOfMonth'] = data.index.day
+    data['Month'] = data.index.month
+
+    # Select relevant features
+    features = ['Open', 'High', 'Low', 'Close', 'Volume', 'MA_20', 'EMA_20', 'RSI', 'MACD', 'DayOfWeek', 'DayOfMonth', 'Month']
+    return data[features]
+
+# Preprocess the stock data for LSTM
+def preprocess_data(data, future_steps):
+    dataset = data.values
+    # Exclude the future_steps data points
+    train_data = dataset[:-future_steps]
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaler.fit(train_data)
+    scaled_data = scaler.transform(dataset)
+    return scaled_data, scaler
+
+# Prepare data for multistep prediction
+def prepare_multistep_data(scaled_data, config, future_steps):
+    x_train = []
+    y_train = []
+    num_features = scaled_data.shape[1]
+
+    for i in range(config.time_step, len(scaled_data) - future_steps + 1):
+        x_train.append(scaled_data[i - config.time_step:i])
+        y_train.append(scaled_data[i:i + future_steps, 3])  # Index 3 corresponds to 'Close' price
+
+    x_train, y_train = np.array(x_train), np.array(y_train)
+    return x_train, y_train
+
+# Build and train the LSTM model with built-in Attention layer
+def build_and_train_model(scaled_data, config, future_steps):
+    x_train, y_train = prepare_multistep_data(scaled_data, config, future_steps)
+    num_features = x_train.shape[2]
+
+    # Build model
+    input_layer = Input(shape=(config.time_step, num_features))
+    x = Bidirectional(LSTM(config.hidden_size, return_sequences=True))(input_layer)
+    x = Dropout(config.dropout_rate)(x)
+    x = Bidirectional(LSTM(config.hidden_size, return_sequences=True))(x)
+    x = Dropout(config.dropout_rate)(x)
+    # Use built-in attention layer
+    attention = Attention()([x, x])
+    attention_flat = Flatten()(attention)
+    output = Dense(future_steps)(attention_flat)
+
+    model = Model(inputs=input_layer, outputs=output)
+
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=config.learning_rate), loss='mean_squared_error')
+    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+    # Train the model
+    history = model.fit(
+        x_train,
+        y_train,
+        batch_size=config.batch_size,
+        epochs=config.epoch,
+        validation_split=config.valid_data_rate,
+        callbacks=[early_stop],
+        verbose=1
+    )
+
+    return model
+
+# Predict future stock prices
+def predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price):
+    # Prepare input data
+    X = np.array([last_sequence])
+
+    # Make prediction
+    pred_scaled = model.predict(X)
+
+    # Create an empty array to inverse transform
+    pred_full = np.zeros((future_steps, scaler.scale_.shape[0]))
+
+    # Place predictions in the 'Close' price column
+    pred_full[:, 3] = pred_scaled[0]  # Index 3 corresponds to 'Close' price
+
+    # Inverse transform the predicted values
+    predictions = scaler.inverse_transform(pred_full)[:, 3]  # Get the 'Close' price
+
+    # Adjust predictions so that the first predicted price equals the last actual price
+    adjustment = last_actual_price - predictions[0]
+    adjusted_predictions = predictions + adjustment
+
+    return adjusted_predictions
+
+# Plot the predicted prices against the actual stock prices (last 6 months + predictions)
+def plot_predictions(data, predictions, days_to_predict):
+    # Filter data to include only the last 6 months
+    last_six_months = data.last('6M')
     
-    # Method to start prediction with smart stopping and retraining
-    def predict_with_smart_stopping(self):
-        # Load initial stock data for default period (start='2010-01-01' and end='today')
-        self.load_stock_data()
-        
-        # Select optimal date range based on volatility
-        self.select_optimal_date_range()
-        
-        # Reload data with the selected start and end dates
-        self.load_stock_data(start=self.start, end=self.end)
-        
-        # Preprocess and train model
-        self.preprocess_data()
-        self.build_and_train_model()
-        
-        # Get predictions
-        predictions, y_test = self.predict_prices()
-        
-        # Check for underfitting
-        if self.check_for_underfitting(predictions, y_test):
-            print("Underfitting detected. Retraining with extended date range.")
-            self.select_optimal_date_range(volatility_threshold=0.015)
-            self.predict_with_smart_stopping()
-        else:
-            self.plot_predictions(predictions)
+    last_date = data.index[-1]
+    prediction_dates = pd.date_range(
+        start=last_date + pd.Timedelta(days=1),
+        periods=days_to_predict,
+        freq='B'  # Business days
+    )
+    prediction_df = pd.DataFrame(
+        data=predictions,
+        index=prediction_dates,
+        columns=['Predictions']
+    )
+    
+    # Combine historical data and predictions for plotting
+    combined_data = pd.concat([last_six_months['Close'], prediction_df['Predictions']])
+    
+    plt.figure(figsize=(16, 6))
+    plt.title(f'Model Predictions for Next {days_to_predict} Days')
+    plt.xlabel('Date', fontsize=18)
+    plt.ylabel('Close Price USD ($)', fontsize=18)
+    plt.plot(combined_data.index, combined_data.values, label='Historical and Predicted Prices')
+    plt.axvline(x=last_date, color='r', linestyle='--', label='Prediction Start')
+    plt.legend()
+    plt.show()
+
+# Full workflow to predict stock prices using the enhanced LSTM model
+def predict_stock(stock_ticker, days_to_predict=60):
+    data = load_stock_data(stock_ticker)
+    future_steps = days_to_predict
+    scaled_data, scaler = preprocess_data(data, future_steps)
+
+    model = build_and_train_model(scaled_data, config, future_steps)
+
+    # Get the last 'time_step' data points
+    last_sequence = scaled_data[-config.time_step:]
+
+    # Get the last actual price
+    last_actual_price = data['Close'].values[-1]
+
+    predictions = predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price)
+    plot_predictions(data, predictions, days_to_predict)
 
 # Example usage:
-# stock = StockPredictor('AAPL')
-# stock.predict_with_smart_stopping()
+predict_stock('AAPL', days_to_predict=60)
