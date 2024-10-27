@@ -24,10 +24,20 @@ class Config:
 
 config = Config()
 
+np.random.seed(config.random_seed)
+tf.random.set_seed(config.random_seed)
+
 # Function to load stock data with additional features
 def load_stock_data(stock_ticker):
-    end = pd.Timestamp.now().strftime('%Y-%m-%d')
-    data = yf.download(stock_ticker, start='2010-01-01', end=end)
+    # Download the maximum available data for the stock ticker
+    full_data = yf.Ticker(stock_ticker).history(period='max')
+
+    # Define start and end dates for the desired range
+    start_date = '2010-01-01'
+    end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
+
+    # Filter the data within the specified date range
+    data = full_data[(full_data.index >= start_date) & (full_data.index <= end_date)]
 
     # Calculate technical indicators
     data['MA_20'] = data['Close'].rolling(window=20).mean()
