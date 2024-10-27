@@ -184,4 +184,4 @@ def predict_stock(stock_ticker, days_to_predict=60):
     plot_predictions(data, predictions, days_to_predict)
 
 # Example usage:
-predict_stock('AAPL', days_to_predict=60)
+# predict_stock('AAPL')
