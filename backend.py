@@ -164,7 +164,13 @@ def plot_predictions(data, predictions, days_to_predict):
     plt.plot(combined_data.index, combined_data.values, label='Historical and Predicted Prices')
     plt.axvline(x=last_date, color='r', linestyle='--', label='Prediction Start')
     plt.legend()
-    plt.show()
+
+    plot_path = "temp_plot.png"
+    plt.savefig(plot_path)
+    plt.close()
+    
+    return plot_path
+
 
 # Full workflow to predict stock prices using the enhanced LSTM model
 def predict_stock(stock_ticker, days_to_predict=60):
@@ -181,7 +187,9 @@ def predict_stock(stock_ticker, days_to_predict=60):
     last_actual_price = data['Close'].values[-1]
 
     predictions = predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price)
-    plot_predictions(data, predictions, days_to_predict)
+    plot_path = plot_predictions(data, predictions, days_to_predict)
+
+    return plot_path
 
 # Example usage:
 # predict_stock('AAPL')
