@@ -80,18 +80,16 @@ def prepare_multistep_data(scaled_data, config, future_steps):
     x_train, y_train = np.array(x_train), np.array(y_train)
     return x_train, y_train
 
-# Build and train the LSTM model with built-in Attention layer
 def build_and_train_model(scaled_data, config, future_steps):
     x_train, y_train = prepare_multistep_data(scaled_data, config, future_steps)
     num_features = x_train.shape[2]
 
-    # Build model
     input_layer = Input(shape=(config.time_step, num_features))
     x = Bidirectional(LSTM(config.hidden_size, return_sequences=True))(input_layer)
     x = Dropout(config.dropout_rate)(x)
     x = Bidirectional(LSTM(config.hidden_size, return_sequences=True))(x)
     x = Dropout(config.dropout_rate)(x)
-    # Use built-in attention layer
+
     attention = Attention()([x, x])
     attention_flat = Flatten()(attention)
     output = Dense(future_steps)(attention_flat)
@@ -101,7 +99,6 @@ def build_and_train_model(scaled_data, config, future_steps):
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=config.learning_rate), loss='mean_squared_error')
     early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
-    # Train the model
     history = model.fit(
         x_train,
         y_train,
@@ -114,30 +111,23 @@ def build_and_train_model(scaled_data, config, future_steps):
 
     return model
 
-# Predict future stock prices
 def predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price):
-    # Prepare input data
     X = np.array([last_sequence])
 
-    # Make prediction
     pred_scaled = model.predict(X)
 
-    # Create an empty array to inverse transform
     pred_full = np.zeros((future_steps, scaler.scale_.shape[0]))
 
-    # Place predictions in the 'Close' price column
-    pred_full[:, 3] = pred_scaled[0]  # Index 3 corresponds to 'Close' price
+    pred_full[:, 3] = pred_scaled[0]  
 
-    # Inverse transform the predicted values
-    predictions = scaler.inverse_transform(pred_full)[:, 3]  # Get the 'Close' price
 
-    # Adjust predictions so that the first predicted price equals the last actual price
+    predictions = scaler.inverse_transform(pred_full)[:, 3]  
+
     adjustment = last_actual_price - predictions[0]
     adjusted_predictions = predictions + adjustment
 
     return adjusted_predictions
 
-# Plot the predicted prices against the actual stock prices (last 6 months + predictions)
 def plot_predictions(data, predictions, days_to_predict):
     # Filter data to include only the last 6 months
     last_six_months = data.last('6M')
@@ -154,7 +144,6 @@ def plot_predictions(data, predictions, days_to_predict):
         columns=['Predictions']
     )
     
-    # Combine historical data and predictions for plotting
     combined_data = pd.concat([last_six_months['Close'], prediction_df['Predictions']])
     
     plt.figure(figsize=(16, 6))
@@ -172,7 +161,6 @@ def plot_predictions(data, predictions, days_to_predict):
     return plot_path
 
 
-# Full workflow to predict stock prices using the enhanced LSTM model
 def predict_stock(stock_ticker, days_to_predict=60):
     data = load_stock_data(stock_ticker)
     future_steps = days_to_predict
@@ -180,10 +168,8 @@ def predict_stock(stock_ticker, days_to_predict=60):
 
     model = build_and_train_model(scaled_data, config, future_steps)
 
-    # Get the last 'time_step' data points
     last_sequence = scaled_data[-config.time_step:]
 
-    # Get the last actual price
     last_actual_price = data['Close'].values[-1]
 
     predictions = predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price)
