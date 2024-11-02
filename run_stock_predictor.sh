@@ -1,6 +1,7 @@
 #!/bin/bash
 
 ENV_NAME="lstm_env"
+MAIN_DIR="main"
 
 if [ ! -d "$ENV_NAME" ]; then
     echo "Creating virtual environment..."
@@ -8,6 +9,8 @@ if [ ! -d "$ENV_NAME" ]; then
 fi
 
 source $ENV_NAME/bin/activate  
+
+pip install --upgrade pip
 
 if [ -f requirements.txt ]; then
     echo "Installing dependencies..."
@@ -17,4 +20,5 @@ else
     exit 1
 fi
 
+cd $MAIN_DIR
 nohup python main.py >/dev/null 2>&1 &
