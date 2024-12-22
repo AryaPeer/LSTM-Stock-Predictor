@@ -7,9 +7,10 @@ from PyQt5.QtCore import Qt, QSize
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.base_size = QSize(400,50)
+        self.base_size = QSize(400, 50)
+        self.result_size = QSize(800, 500)  # Define result window size
         self.initUI()
-            
+      
     def initUI(self):
         self.setWindowTitle("Stock Predictor")
         self.resize(self.base_size) 
@@ -53,7 +54,16 @@ class MainWindow(QWidget):
         self.status_label.setText(message)
     
     def display_stock_graph(self, plot_path):
-        self.result_label.setPixmap(QPixmap(plot_path))
+        pixmap = QPixmap(plot_path)
+
+        scaled_pixmap = pixmap.scaled(
+            self.result_size.width() - 40, 
+            self.result_size.height() - 100, 
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        self.result_label.setPixmap(scaled_pixmap)
+        self.resize(self.result_size)
         self.stacked_layout.setCurrentWidget(self.result_widget)
 
     def go_back_to_search(self):
