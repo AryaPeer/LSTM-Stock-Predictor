@@ -21,14 +21,14 @@ class Config:
     """
     Basic configuration for model training.
     """
-    hidden_size = 64         # Number of units in LSTM layers
+    hidden_size = 128        # Number of units in LSTM layers
     lstm_layers = 2          # Number of LSTM layers
-    dropout_rate = 0.2       # Dropout rate for regularization
-    time_step = 30           # Number of past days used for each training input
-    batch_size = 32
+    dropout_rate = 0.2      # Dropout rate for regularization
+    time_step = 20        # Number of past days used for each training input
+    batch_size = 64
     learning_rate = 0.001
     epoch = 30
-    valid_data_rate = 0.2
+    valid_data_rate = 0.15
     random_seed = 42
 
 
@@ -179,8 +179,8 @@ def evaluate_fold(train_data: np.ndarray, val_data: np.ndarray, config: Enhanced
         batch_size=config.batch_size,
         epochs=config.epoch,
         callbacks=[
-            EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True),
-            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.7, patience=7)
+            EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True),
+            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.7, patience=5)
         ],
         verbose=0
     )
@@ -235,10 +235,10 @@ def build_and_train_model(scaled_data, config, future_steps):
     
     callbacks = [
         EarlyStopping(
-            monitor='val_loss', patience=20, restore_best_weights=True, min_delta=1e-5
+            monitor='val_loss', patience=7, restore_best_weights=True, min_delta=1e-5
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss', factor=0.7, patience=7, min_lr=1e-6, verbose=1
+            monitor='val_loss', factor=0.7, patience=5, min_lr=1e-6, verbose=1
         )
     ]
     
@@ -261,20 +261,141 @@ def build_and_train_model(scaled_data, config, future_steps):
 
 def predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price):
     """
-    Predict future 'Close' prices and apply a simple offset to avoid extreme jumps.
+    Predict future prices with realistic market fluctuations using a noise-adjusted approach.
     """
-    single_prediction = model.predict(np.array([last_sequence]), verbose=0)[0]
+    predictions = np.zeros(future_steps)
+    current_sequence = last_sequence.copy()
     
+    # Calculate historical metrics
+    historical_prices = scaler.inverse_transform(last_sequence)[:, 3]
+    historical_returns = np.diff(np.log(historical_prices))
+    historical_vol = np.std(historical_returns) * np.sqrt(252)
+    historical_mean_return = np.mean(historical_returns)
+    
+    # Calculate daily volatility components
+    daily_vol = historical_vol / np.sqrt(252)
+    mean_reversion_strength = 0.1  # Mean reversion factor
+    
+    # Initialize return series
+    cumulative_return = 0
+    
+    for i in range(future_steps):
+        # Predict base trend
+        model_input = np.array([current_sequence])
+        base_pred = model.predict(model_input, verbose=0)[0][0]
+        
+        # Add market noise components
+        random_component = np.random.normal(0, daily_vol)
+        mean_reversion = mean_reversion_strength * (historical_mean_return - cumulative_return)
+        momentum_factor = 0.05 * (predictions[i-1] - predictions[i-2]) if i > 1 else 0
+        
+        # Combine components
+        daily_return = (
+            random_component +
+            mean_reversion +
+            momentum_factor
+        )
+        
+        cumulative_return += daily_return
+        
+        # Update prediction with noise components
+        current_pred = base_pred * (1 + daily_return)
+        predictions[i] = current_pred
+        
+        # Update sequence for next prediction
+        new_row = current_sequence[-1].copy()
+        new_row[3] = current_pred
+        current_sequence = np.roll(current_sequence, -1, axis=0)
+        current_sequence[-1] = new_row
+    
+    # Convert to price scale
     pred_full = np.zeros((future_steps, scaler.scale_.shape[0]))
-    pred_full[:, 3] = single_prediction
+    pred_full[:, 3] = predictions
+    price_predictions = scaler.inverse_transform(pred_full)[:, 3]
     
-    one_shot_price_pred = scaler.inverse_transform(pred_full)[:, 3]
+    # Calculate confidence intervals
+    time_scalar = np.sqrt(np.arange(1, future_steps + 1))
+    vol_adjusted = historical_vol / np.sqrt(252)
+    pred_std = last_actual_price * vol_adjusted * time_scalar
+    confidence_intervals = np.array([
+        price_predictions - 1.96 * pred_std,
+        price_predictions + 1.96 * pred_std
+    ]).T
     
-    price_diff = last_actual_price - one_shot_price_pred[0]
-    adjusted_pred = one_shot_price_pred + price_diff
-    adjusted_pred = np.maximum(adjusted_pred, 0)
+    # Adjust predictions to prevent initial jump
+    adjustment = last_actual_price - price_predictions[0]
+    adjusted_predictions = price_predictions + adjustment
+    confidence_intervals += adjustment
     
-    return adjusted_pred
+    # Ensure no negative prices
+    confidence_intervals = np.maximum(confidence_intervals, 0)
+    adjusted_predictions = np.maximum(adjusted_predictions, 0)
+    
+    return adjusted_predictions, confidence_intervals
+
+def calculate_position_sizes(predictions: np.ndarray, confidence_intervals: np.ndarray, 
+                           config: EnhancedConfig, current_volatility: float) -> np.ndarray:
+
+    # Calculate prediction strength relative to confidence intervals
+    mid_price = (confidence_intervals[:, 1] + confidence_intervals[:, 0]) / 2
+    interval_width = confidence_intervals[:, 1] - confidence_intervals[:, 0]
+    
+    # Normalize prediction signal
+    signal_strength = (predictions - mid_price) / (interval_width / 2)
+    signal_strength = np.clip(signal_strength, -1, 1)  # Limit extreme signals
+    
+    # Scale positions by volatility target
+    volatility_scalar = min(config.volatility_target / current_volatility, 2.0)  # Cap leverage at 2x
+    raw_positions = signal_strength * volatility_scalar
+    
+    # Apply maximum position constraint
+    positions = np.clip(raw_positions, -config.max_position, config.max_position)
+    
+    # Smooth position changes
+    smoothed_positions = pd.Series(positions).ewm(span=5).mean().values
+    
+    return smoothed_positions
+
+def backtest_strategy(data: pd.DataFrame, predictions: np.ndarray, 
+                     confidence_intervals: np.ndarray, config: EnhancedConfig) -> pd.DataFrame:
+    """
+    Backtest the trading strategy using position sizing and confidence intervals.
+    """
+    # Calculate realized volatility
+    returns = data['Close'].pct_change()
+    realized_vol = returns.rolling(30).std() * np.sqrt(252)
+    
+    # Generate positions
+    positions = calculate_position_sizes(
+        predictions,
+        confidence_intervals,
+        config,
+        realized_vol.iloc[-1]
+    )
+    
+    # Create backtest results DataFrame
+    backtest_dates = pd.date_range(
+        start=data.index[-1] + pd.Timedelta(days=1),
+        periods=len(predictions),
+        freq='B'
+    )
+    
+    results = pd.DataFrame({
+        'Date': backtest_dates,
+        'Prediction': predictions,
+        'Position': positions,
+        'Lower_CI': confidence_intervals[:, 0],
+        'Upper_CI': confidence_intervals[:, 1]
+    })
+    
+    results['Predicted_Return'] = np.log(results['Prediction'] / results['Prediction'].shift(1))
+    results['Strategy_Return'] = results['Position'].shift(1) * results['Predicted_Return']
+    results['Cumulative_Return'] = np.exp(results['Strategy_Return'].cumsum()) - 1
+    results['Rolling_Volatility'] = results['Strategy_Return'].rolling(30).std() * np.sqrt(252)
+    results['Rolling_Sharpe'] = (results['Strategy_Return'].rolling(30).mean() * 252 / 
+                                (results['Rolling_Volatility'] + 1e-6))
+    
+    return results
 
 
 def plot_predictions(data, predictions, days_to_predict):
