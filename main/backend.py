@@ -249,54 +249,95 @@ def build_and_train_model(scaled_data, config, future_steps):
 
 def predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price):
     """Predict future prices with confidence intervals."""
+    
+    # Initialize an array to store predicted prices for future steps
     predictions = np.zeros(future_steps)
+    
+    # Copy the last known sequence to modify iteratively during prediction
     current_sequence = last_sequence.copy()
     
-    historical_prices = scaler.inverse_transform(last_sequence)[:, 3]
+    # Extract the historical prices from the scaled sequence and invert scaling
+    historical_prices = scaler.inverse_transform(last_sequence)[:, 3]  # Column index 3 corresponds to Close price
+    
+    # Compute historical log returns of the stock
     historical_returns = np.diff(np.log(historical_prices))
+    
+    # Calculate historical annualized volatility (standard deviation of log returns, scaled for 252 trading days)
     historical_vol = np.std(historical_returns) * np.sqrt(252)
+    
+    # Compute the historical mean return of the stock
     historical_mean_return = np.mean(historical_returns)
     
+    # Estimate daily volatility from the annualized volatility
     daily_vol = historical_vol / np.sqrt(252)
-    mean_reversion_strength = 0.1
     
+    # Define a mean reversion strength factor (helps adjust predictions based on past returns)
+    mean_reversion_strength = 0.1
+
+    # Track cumulative return for mean reversion adjustments
     cumulative_return = 0
     
+    # Loop through each future time step to generate predictions
     for i in range(future_steps):
+        # Prepare the model input by reshaping the current sequence
         model_input = np.array([current_sequence])
+        
+        # Get base prediction from the trained LSTM model
         base_pred = model.predict(model_input, verbose=0)[0][0]
         
+        # Introduce randomness using a normal distribution scaled by daily volatility
         random_component = np.random.normal(0, daily_vol)
+        
+        # Apply a mean reversion adjustment: if past returns have deviated, adjust towards the historical mean
         mean_reversion = mean_reversion_strength * (historical_mean_return - cumulative_return)
+        
+        # Apply a simple momentum factor: adjusts prediction slightly based on past predicted price changes
         momentum_factor = 0.05 * (predictions[i-1] - predictions[i-2]) if i > 1 else 0
         
+        # Compute adjusted daily return using all three components
         daily_return = random_component + mean_reversion + momentum_factor
+        
+        # Update cumulative return tracker
         cumulative_return += daily_return
         
+        # Adjust the base prediction using the calculated daily return
         current_pred = base_pred * (1 + daily_return)
+        
+        # Store the predicted price
         predictions[i] = current_pred
         
-        new_row = current_sequence[-1].copy()
-        new_row[3] = current_pred
-        current_sequence = np.roll(current_sequence, -1, axis=0)
-        current_sequence[-1] = new_row
-    
+        # Update the input sequence for the next prediction step
+        new_row = current_sequence[-1].copy()  # Copy last row of sequence
+        new_row[3] = current_pred  # Replace the Close price with the new predicted value
+        current_sequence = np.roll(current_sequence, -1, axis=0)  # Shift sequence left
+        current_sequence[-1] = new_row  # Insert updated row at the last position
+
+    # Prepare an array to store the full prediction data (to reverse MinMax scaling)
     pred_full = np.zeros((future_steps, scaler.scale_.shape[0]))
-    pred_full[:, 3] = predictions
+    
+    # Place the predicted Close prices into the correct column
+    pred_full[:, 3] = predictions  
+    
+    # Reverse MinMax scaling to convert back to the original price scale
     price_predictions = scaler.inverse_transform(pred_full)[:, 3]
+
+    # Compute confidence intervals for predictions
+    time_scalar = np.sqrt(np.arange(1, future_steps + 1))  # Scale uncertainty over time
+    vol_adjusted = historical_vol / np.sqrt(252)  # Adjust volatility for daily returns
+    pred_std = last_actual_price * vol_adjusted * time_scalar  # Compute standard deviation of predictions
     
-    time_scalar = np.sqrt(np.arange(1, future_steps + 1))
-    vol_adjusted = historical_vol / np.sqrt(252)
-    pred_std = last_actual_price * vol_adjusted * time_scalar
+    # Compute 95% confidence intervals (1.96 * standard deviation)
     confidence_intervals = np.array([
-        price_predictions - 1.96 * pred_std,
-        price_predictions + 1.96 * pred_std
-    ]).T
-    
+        price_predictions - 1.96 * pred_std,  # Lower bound
+        price_predictions + 1.96 * pred_std   # Upper bound
+    ]).T  # Transpose to match shape
+
+    # Adjust predictions so that the first predicted price starts at `last_actual_price`
     adjustment = last_actual_price - price_predictions[0]
     adjusted_predictions = price_predictions + adjustment
     confidence_intervals += adjustment
-    
+
+    # Ensure no negative values in confidence intervals or predictions
     confidence_intervals = np.maximum(confidence_intervals, 0)
     adjusted_predictions = np.maximum(adjusted_predictions, 0)
     
