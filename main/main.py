@@ -22,24 +22,24 @@ class WorkerThread(QThread):
             
             # Step 2: Preprocess data
             self.progress.emit("Preprocessing data...")
-            scaled_data, scaler = backend.preprocess_data(data, 30)  # Changed to 30 days
+            scaled_data, scaler = backend.preprocess_data(data, 30) 
             
             # Step 3: Cross-validation
             cv_splits = backend.time_series_cv_split(scaled_data, config)
             for i, (train_data, val_data) in enumerate(cv_splits, 1):
                 self.progress.emit(f"Training fold {i}/{config.n_splits}...")
-                model, metrics = backend.evaluate_fold(train_data, val_data, config, 30)  # Changed to 30 days
+                model, metrics = backend.evaluate_fold(train_data, val_data, config, 30) 
             
             # Step 4: Train final model
             self.progress.emit("Training final model...")
-            final_model, val_loss = backend.build_and_train_model(scaled_data, config, 30)  # Changed to 30 days
+            final_model, val_loss = backend.build_and_train_model(scaled_data, config, 30)
             
             # Step 5: Generate predictions with confidence intervals
             self.progress.emit("Generating predictions...")
             last_sequence = scaled_data[-config.time_step:]
             last_actual_price = data['Close'].values[-1]
             predictions, confidence_intervals = backend.predict_future_prices(
-                final_model, last_sequence, scaler, 30, last_actual_price  # Changed to 30 days
+                final_model, last_sequence, scaler, 30, last_actual_price 
             )
             
             # Step 6: Run backtesting

@@ -16,6 +16,7 @@ class MainWindow(QWidget):
         self.resize(self.base_size) 
 
         self.stacked_layout = QStackedLayout()
+        
         self.search_widget = QWidget()
         self.search_layout = QVBoxLayout()
         
