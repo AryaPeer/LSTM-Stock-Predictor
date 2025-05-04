@@ -8,10 +8,10 @@ from PyQt5.QtCore import QThread, pyqtSignal
 class WorkerThread(QThread):
     """
     Background worker thread that handles the entire data-loading,
-    training, prediction, and backtesting sequence.
+    training, and prediction,
     Emits progress messages and final results back to the UI.
     """
-    finished = pyqtSignal(str, pd.DataFrame)
+    finished = pyqtSignal(str)
     progress = pyqtSignal(str)
     
     def __init__(self, ticker):
@@ -25,9 +25,8 @@ class WorkerThread(QThread):
         2) Perform cross-validation
         3) Train final model
         4) Generate future predictions
-        5) Backtest strategy
-        6) Plot results
-        7) Emit final plot path and results
+        5) Plot results
+        6) Emit final plot path and results
         """
         try:
             # Step 1: Load data
@@ -104,7 +103,7 @@ def main():
     def on_prediction_finished(plot_path):
         """
         Called when the worker thread finishes.
-        Receives the path to the plot image and the backtest DataFrame.
+        Receives the path to the plot image.
         Updates the UI with metrics and the plot.
         """
         main_window.search_button.setEnabled(True)

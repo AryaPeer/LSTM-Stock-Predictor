@@ -1,4 +1,3 @@
-import backtrader as bt
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -32,73 +31,11 @@ class Config:
 class EnhancedConfig(Config):
     """Extended config for backtesting."""
     n_splits = 3
-    volatility_target = 0.15
-    confidence_threshold = 1.5
 
 # Set random seeds
 config = EnhancedConfig()
 np.random.seed(config.random_seed)
 tf.random.set_seed(config.random_seed)
-
-# --------------------------------------------------------------------------------
-# Backtrader Strategy
-# --------------------------------------------------------------------------------
-
-class MLPredictionStrategy(bt.Strategy):
-    """
-    Uses model predictions to determine target positions.
-    """
-    params = (
-        ('prediction_window', 30),
-        ('position_size', 1.0),
-    )
-    
-    def __init__(self):
-        # Store predictions and confidence intervals
-        self.predictions = None
-        self.confidence_intervals = None
-        self.order = None
-        self.current_position = 0
-    
-    def set_predictions(self, predictions, confidence_intervals):
-        self.predictions = predictions
-        self.confidence_intervals = confidence_intervals
-    
-    def next(self):
-        # Skip if no predictions are available
-        if self.predictions is None:
-            return
-        
-        # Current index in the prediction array
-        idx = len(self) - 1
-        if idx >= len(self.predictions):
-            return
-        
-        # Determine the new target position
-        target_position = self.calculate_position(idx)
-        
-        # If current position differs from new target, execute order
-        if self.current_position != target_position:
-            if self.order:
-                self.cancel(self.order)
-            size = (target_position - self.current_position) * self.params.position_size
-            self.order = self.order_target_percent(target=size)
-            self.current_position = target_position
-    
-    def calculate_position(self, idx):
-        # Compute return vs. current price
-        pred_return = (self.predictions[idx] / self.data.close[0]) - 1
-        # Calculate the relative confidence interval width
-        confidence_width = (self.confidence_intervals[idx][1] - self.confidence_intervals[idx][0]) / self.data.close[0]
-        
-        # If width > 0, scale the position; else 0
-        if confidence_width > 0:
-            position = pred_return / confidence_width
-        else:
-            position = 0
-        
-        # Keep position within -1 to 1
-        return np.clip(position, -1, 1)
 
 # --------------------------------------------------------------------------------
 # Data Loading and Preprocessing
