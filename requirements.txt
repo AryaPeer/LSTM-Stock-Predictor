@@ -16,7 +16,9 @@ html5lib==1.1
 idna==3.10
 joblib==1.4.2
 keras==3.9.0
+keras-tuner==1.4.7
 kiwisolver==1.4.7
+kt-legacy==1.0.5
 libclang==18.1.1
 lxml==5.3.0
 Markdown==3.7
@@ -32,9 +34,9 @@ opt_einsum==3.4.0
 optree==0.13.0
 packaging==24.1
 pandas==2.2.3
+pandas-datareader==0.10.0
 peewee==3.17.7
 pillow==11.0.0
-pip==24.0
 platformdirs==4.3.6
 protobuf==5.28.3
 Pygments==2.18.0
@@ -44,11 +46,11 @@ PyQt5-Qt5==5.15.15
 PyQt5_sip==12.15.0
 python-dateutil==2.9.0.post0
 pytz==2024.2
-requests==2.32.3
+requests==2.32.4
 rich==13.9.3
 scikit-learn==1.5.2
 scipy==1.14.1
-setuptools==75.3.0
+setuptools==78.1.1
 six==1.16.0
 soupsieve==2.6
 ta==0.11.0
@@ -65,4 +67,3 @@ Werkzeug==3.0.6
 wheel==0.44.0
 wrapt==1.16.0
 yfinance==0.2.48
-backtrader==1.9.78.123

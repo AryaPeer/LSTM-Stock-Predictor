@@ -1,435 +1,247 @@
-import backtrader as bt
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import yfinance as yf
-from sklearn.preprocessing import MinMaxScaler
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, LSTM, Dropout, Bidirectional, Attention, Input, Flatten
-from tensorflow.keras.callbacks import EarlyStopping
-from tensorflow.keras.regularizers import l2
-from typing import Tuple, List
-from sklearn.model_selection import TimeSeriesSplit
 import ta
+import pandas_datareader.data as web
+import tensorflow as tf
 
-# --------------------------------------------------------------------------------
-# Configuration classes
-# --------------------------------------------------------------------------------
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import TimeSeriesSplit
+from typing import List, Tuple
+from tensorflow.keras.regularizers import l2
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import (
+    Input,
+    Conv1D,
+    MaxPooling1D,
+    Bidirectional,
+    LSTM,
+    Attention,
+    Dropout,
+    Dense,
+    Flatten,
+)
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
+# Model and training configuration
 class Config:
-    """Basic config for training."""
-    hidden_size = 128
-    lstm_layers = 2
-    dropout_rate = 0.2
-    time_step = 20
-    batch_size = 64
-    learning_rate = 0.001
-    epoch = 30
-    valid_data_rate = 0.15
-    random_seed = 42
+    time_step: int = 60  # Input sequence length
+    future_steps: int = 10  # Prediction horizon
+    
+    cnn_filters: int = 32
+    kernel_size: int = 3
+    lstm_units: int = 128
+    dropout_rate: float = 0.2
+    
+    batch_size: int = 64
+    learning_rate: float = 1e-3
+    epochs: int = 100  # Max epochs
+    valid_split: float = 0.15
+    random_seed: int = 42
 
-class EnhancedConfig(Config):
-    """Extended config for backtesting."""
-    n_splits = 3
-    volatility_target = 0.15
-    confidence_threshold = 1.5
+# Cross-validation configuration
+class CVConfig(Config):
+    n_splits: int = 5  # Number of CV folds
 
-# Set random seeds
-config = EnhancedConfig()
-np.random.seed(config.random_seed)
-tf.random.set_seed(config.random_seed)
+np.random.seed(Config.random_seed)
+tf.random.set_seed(Config.random_seed)
 
-# --------------------------------------------------------------------------------
-# Backtrader Strategy
-# --------------------------------------------------------------------------------
+# Encode cyclical features
+def _cyclical_encode(series: pd.Series, period: int) -> Tuple[pd.Series, pd.Series]:
+    radians = 2 * np.pi * series / period
+    return np.sin(radians), np.cos(radians)
 
-class MLPredictionStrategy(bt.Strategy):
-    """
-    Uses model predictions to determine target positions.
-    """
-    params = (
-        ('prediction_window', 30),
-        ('position_size', 1.0),
-    )
-    
-    def __init__(self):
-        # Store predictions and confidence intervals
-        self.predictions = None
-        self.confidence_intervals = None
-        self.order = None
-        self.current_position = 0
-    
-    def set_predictions(self, predictions, confidence_intervals):
-        self.predictions = predictions
-        self.confidence_intervals = confidence_intervals
-    
-    def next(self):
-        # Skip if no predictions are available
-        if self.predictions is None:
-            return
-        
-        # Current index in the prediction array
-        idx = len(self) - 1
-        if idx >= len(self.predictions):
-            return
-        
-        # Determine the new target position
-        target_position = self.calculate_position(idx)
-        
-        # If current position differs from new target, execute order
-        if self.current_position != target_position:
-            if self.order:
-                self.cancel(self.order)
-            size = (target_position - self.current_position) * self.params.position_size
-            self.order = self.order_target_percent(target=size)
-            self.current_position = target_position
-    
-    def calculate_position(self, idx):
-        # Compute return vs. current price
-        pred_return = (self.predictions[idx] / self.data.close[0]) - 1
-        # Calculate the relative confidence interval width
-        confidence_width = (self.confidence_intervals[idx][1] - self.confidence_intervals[idx][0]) / self.data.close[0]
-        
-        # If width > 0, scale the position; else 0
-        if confidence_width > 0:
-            position = pred_return / confidence_width
-        else:
-            position = 0
-        
-        # Keep position within -1 to 1
-        return np.clip(position, -1, 1)
+# Load and preprocess stock data
+def load_stock_data(ticker: str, start: str = "2010-01-01") -> pd.DataFrame:
+    end = pd.Timestamp.today().strftime("%Y-%m-%d")
 
-# --------------------------------------------------------------------------------
-# Data Loading and Preprocessing
-# --------------------------------------------------------------------------------
+    df = web.DataReader(ticker, "stooq", start, end)
+    if df.empty:
+        raise ValueError(f"No data for {ticker} from Stooq")
+    df = df.sort_index()
+    df.index = pd.to_datetime(df.index)
 
-def load_stock_data(stock_ticker):
-    """
-    Load historical data and add some technical indicators.
-    """
-    full_data = yf.Ticker(stock_ticker).history(period='max')
-    
-    # Limit date range
-    start_date = '2010-01-01'
-    end_date = pd.Timestamp.now().strftime('%Y-%m-%d')
-    data = full_data.loc[(full_data.index >= start_date) & (full_data.index <= end_date)].copy()
-    
-    # Compute indicators
-    data['MA_20'] = data['Close'].rolling(window=20).mean()
-    data['EMA_20'] = data['Close'].ewm(span=20, adjust=False).mean()
-    data['RSI'] = ta.momentum.RSIIndicator(close=data['Close'], window=14).rsi()
-    data['MACD'] = ta.trend.MACD(close=data['Close']).macd()
-    data['Volatility'] = data['Close'].pct_change().rolling(20).std()
-    
-    # Add simple date features
-    data['DayOfWeek'] = data.index.dayofweek
-    data['DayOfMonth'] = data.index.day
-    data['Month'] = data.index.month
-    
-    # Remove missing rows
-    data = data.dropna()
-    
-    # Select columns for the model
-    features = [
-        'Open', 'High', 'Low', 'Close', 'Volume',
-        'MA_20', 'EMA_20', 'RSI', 'MACD', 'Volatility',
-        'DayOfWeek', 'DayOfMonth', 'Month'
+    # Add S&P 500 data
+    sp500 = web.DataReader("^spx", "stooq", start, end)["Close"].sort_index()
+    sp500.name = "SP500_Close"
+    df = df.join(sp500, how="left")
+
+    # Technical indicators
+    df["MA_20"]   = ta.trend.sma_indicator(df["Close"], window=20)
+    df["EMA_20"]  = ta.trend.ema_indicator(df["Close"], window=20)
+    df["MA_50"]   = ta.trend.sma_indicator(df["Close"], window=50)
+    df["MA_100"]  = ta.trend.sma_indicator(df["Close"], window=100)
+    df["RSI_14"]  = ta.momentum.rsi(df["Close"], window=14)
+    df["MACD"]    = ta.trend.macd(df["Close"])
+    bb            = ta.volatility.BollingerBands(df["Close"], window=20)
+    df["BB_High"] = bb.bollinger_hband()
+    df["BB_Low"]  = bb.bollinger_lband()
+    df["Stoch"]   = ta.momentum.stoch(df["High"], df["Low"], df["Close"], window=14, smooth_window=3)
+    df["ATR"]     = ta.volatility.average_true_range(df["High"], df["Low"], df["Close"], window=14)
+    df["OBV"]     = ta.volume.on_balance_volume(df["Close"], df["Volume"])
+    df["MFI"]     = ta.volume.money_flow_index(df["High"], df["Low"], df["Close"], df["Volume"], window=14)
+
+    df["Return"] = df["Close"].pct_change()
+    df["Volatility_20"] = df["Return"].rolling(20).std()
+
+    # Calendar features
+    df["DayOfWeek"] = df.index.dayofweek
+    df["Month"] = df.index.month
+    df["DayOfWeek_sin"], df["DayOfWeek_cos"] = _cyclical_encode(df["DayOfWeek"], 7)
+    df["Month_sin"],    df["Month_cos"] = _cyclical_encode(df["Month"], 12)
+
+    df = df.dropna()
+    feature_cols = [
+        "Open", "High", "Low", "Close", "Volume",
+        "MA_20", "EMA_20", "MA_50", "MA_100", "RSI_14", "MACD",
+        "BB_High", "BB_Low", "Stoch", "ATR", "OBV", "MFI",
+        "Return", "Volatility_20", "SP500_Close",
+        "DayOfWeek_sin", "DayOfWeek_cos", "Month_sin", "Month_cos",
     ]
-    
-    return data[features]
+    return df[feature_cols]
 
-def preprocess_data(data, future_steps):
-    """
-    Scale the dataset with MinMaxScaler.
-    """
-    dataset = data.values
-    # We'll fit the scaler on data except the future steps
-    train_data = dataset[:-future_steps]
-    
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaler.fit(train_data)
-    scaled_data = scaler.transform(dataset)
-    
-    return scaled_data, scaler
+# Scale data
+def preprocess_data(data: pd.DataFrame, cfg: Config) -> Tuple[np.ndarray, MinMaxScaler]:
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(data.values)
+    return scaled, scaler
 
-def prepare_multistep_data(scaled_data, config, future_steps):
-    """
-    Create x (input) and y (target) sets for forecasting.
-    """
-    x_train, y_train = [], []
-    
-    for i in range(config.time_step, len(scaled_data) - future_steps + 1):
-        # Last 'time_step' rows for features
-        x_train.append(scaled_data[i - config.time_step:i])
-        # Next 'future_steps' days for the Close price (column index 3)
-        y_train.append(scaled_data[i:i + future_steps, 3])
-    
-    return np.array(x_train), np.array(y_train)
+# Create time series sequences
+def _make_sequences(scaled: np.ndarray, cfg: Config) -> Tuple[np.ndarray, np.ndarray]:
+    X, y = [], []
+    for i in range(cfg.time_step, len(scaled) - cfg.future_steps + 1):
+        X.append(scaled[i - cfg.time_step : i])
+        y.append(scaled[i : i + cfg.future_steps, 3])  # Target is 'Close' price
+    return np.asarray(X), np.asarray(y)
 
-# --------------------------------------------------------------------------------
-# Model Training Helpers
-# --------------------------------------------------------------------------------
+# Time series cross-validation
+def time_series_cv(data: np.ndarray, cv_cfg: CVConfig) -> List[Tuple[np.ndarray, np.ndarray]]:
+    splitter = TimeSeriesSplit(n_splits=cv_cfg.n_splits)
+    folds: List[Tuple[np.ndarray, np.ndarray]] = []
+    for train_idx, val_idx in splitter.split(data):
+        if len(train_idx) < cv_cfg.time_step:
+            continue
+        folds.append((data[train_idx], data[val_idx]))
+    return folds
 
-def time_series_cv_split(data: np.ndarray, config: EnhancedConfig) -> List[Tuple[np.ndarray, np.ndarray]]:
-    """
-    Time series cross-validation splits.
-    """
-    tscv = TimeSeriesSplit(n_splits=config.n_splits)
-    splits = []
+# Build CNN-LSTM model
+def _build_model(n_features: int, cfg: Config) -> Model:
+    inp = Input(shape=(cfg.time_step, n_features))
     
-    for train_idx, val_idx in tscv.split(data):
-        # Only use splits with enough data
-        if len(train_idx) > config.time_step:
-            splits.append((data[train_idx], data[val_idx]))
+    # CNN layers
+    x = Conv1D(cfg.cnn_filters, cfg.kernel_size, activation="relu", padding="same")(inp)
+    x = MaxPooling1D(2)(x)
     
-    return splits
-
-def evaluate_fold(train_data: np.ndarray, val_data: np.ndarray, config: EnhancedConfig, future_steps: int):
-    """
-    Train and evaluate model on a single CV fold.
-    """
-    x_train, y_train = prepare_multistep_data(train_data, config, future_steps)
-    x_val, y_val = prepare_multistep_data(val_data, config, future_steps)
-    
-    # Build model
-    input_layer = Input(shape=(config.time_step, train_data.shape[1]))
-    x = Bidirectional(LSTM(config.hidden_size, return_sequences=True, kernel_regularizer=l2(1e-5)))(input_layer)
-    x = Dropout(config.dropout_rate)(x)
-    x = Bidirectional(LSTM(config.hidden_size, return_sequences=True, kernel_regularizer=l2(1e-5)))(x)
-    x = Dropout(config.dropout_rate)(x)
+    # BiLSTM layers
+    x = Bidirectional(LSTM(cfg.lstm_units, return_sequences=True, kernel_regularizer=l2(1e-5)))(x)
+    x = Dropout(cfg.dropout_rate)(x)
+    x = Bidirectional(LSTM(cfg.lstm_units // 2, return_sequences=True, kernel_regularizer=l2(1e-5)))(x)
+    x = Dropout(cfg.dropout_rate)(x)
     
     # Attention layer
-    attention = Attention()([x, x])
-    attention_flat = Flatten()(attention)
+    context = Attention()([x, x])
+    context = Flatten()(context)
     
     # Dense layers
-    x = Dense(config.hidden_size, activation='relu')(attention_flat)
-    x = Dense(config.hidden_size // 2, activation='tanh')(x)
-    output = Dense(future_steps)(x)
+    x = Dense(128, activation="relu")(context)
+    x = Dense(64, activation="tanh")(x)
+    out = Dense(cfg.future_steps)(x)
     
-    model = Model(inputs=input_layer, outputs=output)
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=config.learning_rate, clipnorm=0.5),
-                  loss='huber')
+    model = Model(inp, out)
+    model.compile(optimizer=tf.keras.optimizers.Adam(cfg.learning_rate, clipnorm=0.5), loss="huber")
+    return model
+
+# Train model
+def train_model(scaled: np.ndarray, cfg: Config) -> Tuple[Model, float]:
+    X, y = _make_sequences(scaled, cfg)
+    model = _build_model(scaled.shape[1], cfg)
     
-    # Fit model
-    history = model.fit(
-        x_train, 
-        y_train,
-        validation_data=(x_val, y_val),
-        batch_size=config.batch_size,
-        epochs=config.epoch,
+    hist = model.fit(
+        X, y,
+        validation_split=cfg.valid_split,
+        batch_size=cfg.batch_size,
+        epochs=cfg.epochs,
         callbacks=[
-            EarlyStopping(monitor='val_loss', patience=8, restore_best_weights=True),
-            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.7, patience=5)
+            EarlyStopping(patience=10, restore_best_weights=True, monitor="val_loss"),
+            ReduceLROnPlateau(patience=5, factor=0.5, monitor="val_loss"),
         ],
-        verbose=0
+        verbose=2,
     )
-    
-    # Return model and final losses
-    return model, {
-        'train_loss': history.history['loss'][-1],
-        'val_loss': history.history['val_loss'][-1],
-        'train_predictions': model.predict(x_train),
-        'val_predictions': model.predict(x_val)
-    }
+    return model, hist.history["val_loss"][-1]
 
-# --------------------------------------------------------------------------------
-# Model Building and Training
-# --------------------------------------------------------------------------------
+# Predict future prices
+def predict_future(model: Model, last_sequence: np.ndarray, scaler: MinMaxScaler, cfg: Config) -> np.ndarray:
+    seq = last_sequence.copy()
+    preds_scaled = np.zeros(cfg.future_steps)
 
-def build_and_train_model(scaled_data, config, future_steps):
-    """
-    Build and train a Bi-LSTM model with Attention.
-    """
-    x_train, y_train = prepare_multistep_data(scaled_data, config, future_steps)
-    
-    input_layer = Input(shape=(config.time_step, scaled_data.shape[1]))
-    
-    # Bi-LSTM layers
-    x = Bidirectional(LSTM(config.hidden_size, return_sequences=True, kernel_regularizer=l2(1e-5)))(input_layer)
-    x = Dropout(0.2)(x)
-    x = Bidirectional(LSTM(config.hidden_size // 2, return_sequences=True, kernel_regularizer=l2(1e-5)))(x)
-    x = Dropout(0.2)(x)
-    
-    # Attention
-    attention = Attention()([x, x])
-    attention_flat = Flatten()(attention)
-    
-    # Dense layers
-    x = Dense(config.hidden_size, activation='relu')(attention_flat)
-    x = Dense(config.hidden_size // 2, activation='tanh')(x)
-    output = Dense(future_steps)(x)
-    
-    model = Model(inputs=input_layer, outputs=output)
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=config.learning_rate, clipnorm=0.5),
-        loss='huber'
-    )
-    
-    # Train
-    history = model.fit(
-        x_train,
-        y_train,
-        batch_size=config.batch_size,
-        epochs=config.epoch,
-        validation_split=config.valid_data_rate,
-        callbacks=[
-            EarlyStopping(monitor='val_loss', patience=7, restore_best_weights=True),
-            tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.7, patience=5)
-        ],
-        verbose=1
-    )
-    
-    return model, history.history['val_loss'][-1]
-
-# --------------------------------------------------------------------------------
-# Prediction and Backtesting
-# --------------------------------------------------------------------------------
-
-def predict_future_prices(model, last_sequence, scaler, future_steps, last_actual_price):
-    """
-    Predict future prices with basic mean reversion and randomness.
-    """
-    # Store predicted values
-    predictions = np.zeros(future_steps)
-    # Copy sequence for iterative updates
-    current_sequence = last_sequence.copy()
-    
-    # Invert scaling to get real prices, focusing on the 'Close' column (index 3)
-    historical_prices = scaler.inverse_transform(last_sequence)[:, 3]
-    
-    # Calculate historical returns and vol
+    last_actual_price = scaler.inverse_transform(seq[-1].reshape(1, -1))[0, 3]
+    historical_prices = scaler.inverse_transform(seq)[:, 3]
     historical_returns = np.diff(np.log(historical_prices))
-    historical_vol = np.std(historical_returns) * np.sqrt(252)
-    historical_mean_return = np.mean(historical_returns)
-    daily_vol = historical_vol / np.sqrt(252)
-    
-    mean_reversion_strength = 0.1
-    cumulative_return = 0
-    
-    # Generate predictions for each step
-    for i in range(future_steps):
-        model_input = np.array([current_sequence])
-        base_pred = model.predict(model_input, verbose=0)[0][0]
-        
-        # Random factor
-        random_component = np.random.normal(0, daily_vol)
-        # Mean reversion
-        mean_reversion = mean_reversion_strength * (historical_mean_return - cumulative_return)
-        # Simple momentum factor
-        momentum_factor = 0.05 * (predictions[i-1] - predictions[i-2]) if i > 1 else 0
-        
-        daily_return = random_component + mean_reversion + momentum_factor
-        cumulative_return += daily_return
-        
-        # Adjust model output
-        current_pred = base_pred * (1 + daily_return)
-        predictions[i] = current_pred
-        
-        # Update sequence with new predicted Close
-        new_row = current_sequence[-1].copy()
-        new_row[3] = current_pred
-        current_sequence = np.roll(current_sequence, -1, axis=0)
-        current_sequence[-1] = new_row
-    
-    # Prepare data for inverse scaling
-    pred_full = np.zeros((future_steps, scaler.scale_.shape[0]))
-    pred_full[:, 3] = predictions
-    price_predictions = scaler.inverse_transform(pred_full)[:, 3]
+    historical_vol = np.std(historical_returns) * np.sqrt(252) if historical_returns.size else 0.0
+    historical_mean = np.mean(historical_returns) if historical_returns.size else 0.0
+    daily_vol = historical_vol / np.sqrt(252) if historical_vol else 0.0
+    mean_rev_strength = 0.1
+    cum_return = 0.0
 
-    # Calculate confidence intervals (assumes daily vol stays similar)
-    time_scalar = np.sqrt(np.arange(1, future_steps + 1))
-    vol_adjusted = historical_vol / np.sqrt(252)
-    pred_std = last_actual_price * vol_adjusted * time_scalar
-    confidence_intervals = np.array([
-        price_predictions - 1.96 * pred_std,  # Lower
-        price_predictions + 1.96 * pred_std   # Upper
-    ]).T
-    
-    # Align first prediction with the last actual price
-    adjustment = last_actual_price - price_predictions[0]
-    adjusted_predictions = price_predictions + adjustment
-    confidence_intervals += adjustment
-    
-    # Remove negatives
-    confidence_intervals = np.maximum(confidence_intervals, 0)
-    adjusted_predictions = np.maximum(adjusted_predictions, 0)
-    
-    return adjusted_predictions, confidence_intervals
+    # Generate predictions with market adjustments
+    for i in range(cfg.future_steps):
+        base_scaled = model.predict(np.expand_dims(seq, 0), verbose=0)[0][0]
+        
+        # Market effects
+        rand = np.random.normal(0, daily_vol)
+        mean_rev = mean_rev_strength * (historical_mean - cum_return)
+        momentum = 0.05 * (preds_scaled[i-1] - preds_scaled[i-2]) if i > 1 else 0.0
+        
+        daily_ret = rand + mean_rev + momentum
+        cum_return += daily_ret
+        
+        adj_scaled = base_scaled * (1 + daily_ret)
+        preds_scaled[i] = adj_scaled
+        
+        # Update sequence
+        new_row = seq[-1].copy()
+        new_row[3] = adj_scaled
+        seq = np.roll(seq, -1, axis=0)
+        seq[-1] = new_row
 
+    # Inverse transform predictions
+    template = np.zeros((cfg.future_steps, scaler.scale_.shape[0]))
+    template[:, 3] = preds_scaled
+    preds = scaler.inverse_transform(template)[:, 3]
+    preds += (last_actual_price - preds[0]) # Adjust to last actual price
+    preds[preds < 0] = 0.0 # Prices cannot be negative
+    return preds
 
-def plot_predictions(data, predictions, days_to_predict):
-    """
-    Plot the latest data plus future predictions.
-    """
-    plt.style.use('fivethirtyeight')
-    fig, ax = plt.subplots(figsize=(8, 4))
+# Full forecasting pipeline
+def forecast_stock(ticker: str, cfg: Config = Config()) -> Tuple[pd.DataFrame, np.ndarray]:
+    data = load_stock_data(ticker)
+    scaled, scaler = preprocess_data(data, cfg)
+    model, _ = train_model(scaled, cfg)
+    last_seq = scaled[-cfg.time_step :]
+    preds = predict_future(model, last_seq, scaler, cfg)
+    return data, preds
+
+# Plot forecast
+def plot_forecast(data: pd.DataFrame, preds: np.ndarray, cfg: Config, save_path: str = "forecast.png") -> str:
+    plt.style.use("fivethirtyeight")
+    fig, ax = plt.subplots(figsize=(10, 4))
     
-    # Last 60 days
-    last_three_months = data['Close'].tail(60)
-    ax.plot(last_three_months.index, last_three_months, label='Historical', color='blue', alpha=0.7)
+    hist = data["Close"].tail(60)
+    ax.plot(hist.index, hist, label="Historical", color="blue", alpha=0.7)
     
-    # Future prediction dates
     last_date = data.index[-1]
-    prediction_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=days_to_predict, freq='B')
-    last_price = data['Close'].iloc[-1]
-    all_dates = [last_date] + list(prediction_dates)
-    all_predictions = [last_price] + list(predictions)
+    pred_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=cfg.future_steps, freq="B")
+    ax.plot([last_date] + list(pred_dates), [hist.iloc[-1]] + preds.tolist(), 
+            label="Forecast", color="red", linestyle="--", linewidth=1)
     
-    ax.plot(all_dates, all_predictions, label='Prediction', color='red', linestyle='--', linewidth=1)
-    
-    # Basic metrics
-    returns = data['Close'].pct_change()
-    last_30_returns = returns.tail(30)
-    volatility = last_30_returns.std() * np.sqrt(252)
-    sharpe = (last_30_returns.mean() * 252) / volatility if volatility != 0 else 0
-    
-    metrics_text = f'30D Metrics:\nVol: {volatility:.2%}\nSharpe: {sharpe:.2f}'
-    ax.text(0.02, 0.98, metrics_text,
-            transform=ax.transAxes,
-            bbox=dict(facecolor='white', alpha=0.8),
-            verticalalignment='top',
-            fontsize=8)
-    
-    ax.set_title(f'{data.index[-1].strftime("%Y-%m-%d")} to {prediction_dates[-1].strftime("%Y-%m-%d")}', fontsize=10)
-    ax.set_xlabel('Date', fontsize=8)
-    ax.set_ylabel('Price ($)', fontsize=8)
-    ax.tick_params(axis='both', labelsize=8)
+    ax.set_title(f"{cfg.future_steps}-Day Price Forecast", fontsize=10)
+    ax.set_xlabel("Date", fontsize=8)
+    ax.set_ylabel("Price", fontsize=8)
+    ax.tick_params(axis="both", labelsize=8)
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plot_path = "temp_plot.png"
-    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
-    
-    return plot_path
-
-def predict_stock(stock_ticker, days_to_predict=60):
-    """
-    Main flow: load data, train model, predict future, and run backtest.
-    """
-    data = load_stock_data(stock_ticker)
-    scaled_data, scaler = preprocess_data(data, days_to_predict)
-    
-    # Build and train model
-    model, _ = build_and_train_model(scaled_data, config, days_to_predict)
-    
-    # Get last sequence for prediction
-    last_sequence = scaled_data[-config.time_step:]
-    last_actual_price = data['Close'].values[-1]
-    
-    # Predict
-    predictions, confidence_intervals = predict_future_prices(
-        model, 
-        last_sequence, 
-        scaler, 
-        days_to_predict, 
-        last_actual_price
-    )
-
-
-    plot_path = plot_predictions(data, predictions, days_to_predict)
-    
-    return plot_path
+    return save_path
