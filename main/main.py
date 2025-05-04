@@ -61,18 +61,11 @@ class WorkerThread(QThread):
                 last_actual_price 
             )
             
-            # Step 6: Run strategy backtest
-            self.progress.emit("Running strategy backtesting...")
-            backtest_results = backend.backtest_strategy(
-                data, 
-                predictions, 
-                confidence_intervals, 
-                config
-            )
+
             
             # Step 7: Plot predictions and emit final results
             plot_path = backend.plot_predictions(data, predictions, 30)
-            self.finished.emit(plot_path, backtest_results)
+            self.finished.emit(plot_path)
             
         except Exception as e:
             # Report errors to the UI via the progress signal
@@ -108,7 +101,7 @@ def main():
         else:
             main_window.display_status_message("Please enter a valid ticker symbol.")
     
-    def on_prediction_finished(plot_path, backtest_results):
+    def on_prediction_finished(plot_path):
         """
         Called when the worker thread finishes.
         Receives the path to the plot image and the backtest DataFrame.
@@ -116,20 +109,6 @@ def main():
         """
         main_window.search_button.setEnabled(True)
         
-        # Calculate final performance metrics
-        final_return = backtest_results['Cumulative_Return'].iloc[-1]
-        final_sharpe = backtest_results['Rolling_Sharpe'].iloc[-1]
-        avg_position = backtest_results['Position'].abs().mean()
-        
-        # Construct status message
-        status_message = (
-            f"Prediction complete!\n"
-            f"Expected Return: {final_return:.1%}\n"
-            f"Sharpe Ratio: {final_sharpe:.2f}\n"
-            f"Avg Position: {avg_position:.2f}"
-        )
-        
-        main_window.display_status_message(status_message)
         main_window.display_stock_graph(plot_path)
     
     def on_back():

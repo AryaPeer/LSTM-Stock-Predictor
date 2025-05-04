@@ -34,9 +34,6 @@ class EnhancedConfig(Config):
     n_splits = 3
     volatility_target = 0.15
     confidence_threshold = 1.5
-    max_position = 1.0
-    commission = 0.001  # 0.1% commission
-    initial_cash = 100000
 
 # Set random seeds
 config = EnhancedConfig()
@@ -361,40 +358,6 @@ def predict_future_prices(model, last_sequence, scaler, future_steps, last_actua
     
     return adjusted_predictions, confidence_intervals
 
-def run_backtest(data, predictions, confidence_intervals, config):
-    """
-    Run backtest using Backtrader framework.
-    """
-    cerebro = bt.Cerebro()
-    data_feed = bt.feeds.PandasData(dataname=data)
-    cerebro.adddata(data_feed)
-    
-    # Add strategy
-    strategy = MLPredictionStrategy
-    cerebro.addstrategy(strategy, prediction_window=len(predictions))
-    
-    # Cash / commission
-    cerebro.broker.setcash(config.initial_cash)
-    cerebro.broker.setcommission(commission=config.commission)
-    
-    # Add analyzers
-    cerebro.addanalyzer(bt.analyzers.SharpeRatio)
-    cerebro.addanalyzer(bt.analyzers.Returns)
-    cerebro.addanalyzer(bt.analyzers.DrawDown)
-    
-    results = cerebro.run()
-    strategy = results[0]
-    strategy.set_predictions(predictions, confidence_intervals)
-    
-    # Create a DataFrame for backtest results
-    backtest_results = pd.DataFrame({
-        'Date': pd.date_range(start=data.index[-1], periods=len(predictions), freq='B'),
-        'Prediction': predictions,
-        'Lower_CI': confidence_intervals[:, 0],
-        'Upper_CI': confidence_intervals[:, 1],
-    })
-    
-    return backtest_results
 
 def plot_predictions(data, predictions, days_to_predict):
     """
@@ -443,69 +406,6 @@ def plot_predictions(data, predictions, days_to_predict):
     
     return plot_path
 
-def calculate_position_sizes(predictions: np.ndarray, confidence_intervals: np.ndarray,
-                             config: EnhancedConfig, current_volatility: float) -> np.ndarray:
-    """
-    Determine how large positions should be based on predictions and intervals.
-    """
-    mid_price = (confidence_intervals[:, 1] + confidence_intervals[:, 0]) / 2
-    interval_width = confidence_intervals[:, 1] - confidence_intervals[:, 0]
-    
-    # Strength of signal
-    signal_strength = (predictions - mid_price) / (interval_width / 2)
-    signal_strength = np.clip(signal_strength, -1, 1)
-    
-    # Adjust position sizing by volatility
-    volatility_scalar = min(config.volatility_target / current_volatility, 2.0)
-    raw_positions = signal_strength * volatility_scalar
-    
-    # Clip to max_position
-    positions = np.clip(raw_positions, -config.max_position, config.max_position)
-    # Smooth positions
-    smoothed_positions = pd.Series(positions).ewm(span=5).mean().values
-    
-    return smoothed_positions
-
-def backtest_strategy(data: pd.DataFrame, predictions: np.ndarray,
-                      confidence_intervals: np.ndarray, config: EnhancedConfig) -> pd.DataFrame:
-    """
-    Simple backtest using predicted returns and position sizing.
-    """
-    returns = data['Close'].pct_change()
-    realized_vol = returns.rolling(30).std() * np.sqrt(252)
-    
-    # Get positions
-    positions = calculate_position_sizes(
-        predictions,
-        confidence_intervals,
-        config,
-        realized_vol.iloc[-1]
-    )
-    
-    backtest_dates = pd.date_range(
-        start=data.index[-1] + pd.Timedelta(days=1),
-        periods=len(predictions),
-        freq='B'
-    )
-    
-    results = pd.DataFrame({
-        'Date': backtest_dates,
-        'Prediction': predictions,
-        'Position': positions,
-        'Lower_CI': confidence_intervals[:, 0],
-        'Upper_CI': confidence_intervals[:, 1]
-    })
-    
-    # Compute returns and track performance
-    results['Predicted_Return'] = np.log(results['Prediction'] / results['Prediction'].shift(1))
-    results['Strategy_Return'] = results['Position'].shift(1) * results['Predicted_Return']
-    results['Cumulative_Return'] = np.exp(results['Strategy_Return'].cumsum()) - 1
-    results['Rolling_Volatility'] = results['Strategy_Return'].rolling(30).std() * np.sqrt(252)
-    results['Rolling_Sharpe'] = (results['Strategy_Return'].rolling(30).mean() * 252 /
-                                 (results['Rolling_Volatility'] + 1e-6))
-    
-    return results
-
 def predict_stock(stock_ticker, days_to_predict=60):
     """
     Main flow: load data, train model, predict future, and run backtest.
@@ -528,22 +428,8 @@ def predict_stock(stock_ticker, days_to_predict=60):
         days_to_predict, 
         last_actual_price
     )
-    
-    # Backtest
-    backtest_results = backtest_strategy(data, predictions, confidence_intervals, config)
-    bt_results = run_backtest(data, predictions, confidence_intervals, config)
-    
-    # Combine results
-    combined_results = pd.merge(
-        backtest_results,
-        bt_results,
-        on='Date',
-        suffixes=('', '_bt')
-    )
 
-    print(combined_results)
-    
-    # Plot
+
     plot_path = plot_predictions(data, predictions, days_to_predict)
     
-    return plot_path, combined_results
+    return plot_path
