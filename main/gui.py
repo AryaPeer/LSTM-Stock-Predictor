@@ -4,8 +4,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QSize
 
-# Import necessary PyQt5 modules for GUI components
-
 class MainWindow(QWidget):
     """
     Main window for the stock prediction app. Provides a search view for inputting a ticker symbol
@@ -14,7 +12,7 @@ class MainWindow(QWidget):
     def __init__(self):
         # Initialize the main window and set up the UI
         super().__init__()
-        # Define default window sizes for the input view and result view
+        # Set default window sizes for both views
         self.base_size = QSize(400, 50)
         self.result_size = QSize(800, 500)
         
@@ -24,57 +22,50 @@ class MainWindow(QWidget):
         """
         Set up the primary UI layout, including the search view and result view.
         """
-        # Configure the window title and initial size
+        # Configure window properties
         self.setWindowTitle("Stock Predictor")
-        self.resize(self.base_size)  # Start with base size
+        self.resize(self.base_size)  # Start with compact size
         
-        # Create a stacked layout to toggle between search and result views
+        # Create stacked layout to switch between views
         self.stacked_layout = QStackedLayout()
         
-        # -----------------------
-        # Search widget setup
-        # -----------------------
+        # Search view setup
         self.search_widget = QWidget()
         self.search_layout = QVBoxLayout()
         
-        # Entry field for the ticker symbol
+        # Ticker input field
         self.search_entry = QLineEdit(self)
         self.search_entry.setPlaceholderText("Enter ticker symbol")
         self.search_layout.addWidget(self.search_entry, alignment=Qt.AlignTop)
         
-        # Button to trigger the search/prediction
+        # Search button
         self.search_button = QPushButton("Search", self)
         self.search_layout.addWidget(self.search_button, alignment=Qt.AlignTop)
 
-        # Label to display status messages (e.g., errors or "Loading...")
+        # Status display area
         self.status_label = QLabel("", self)
         self.status_label.setAlignment(Qt.AlignCenter)
         self.search_layout.addWidget(self.status_label, alignment=Qt.AlignTop)
         
         self.search_widget.setLayout(self.search_layout)
         
-        # -----------------------
-        # Result widget setup
-        # -----------------------
+        # Results view setup
         self.result_widget = QWidget()
         self.result_layout = QVBoxLayout()
         
-        # Label to show the stock graph as a QPixmap
+        # Image display area for the forecast chart
         self.result_label = QLabel(self)
         self.result_label.setAlignment(Qt.AlignCenter)
-        # Allows the QPixmap to scale within the label
         self.result_label.setScaledContents(True)
         self.result_layout.addWidget(self.result_label, stretch=1)
 
-        # Button to navigate back to the search screen
+        # Back button to return to search
         self.back_button = QPushButton("Back", self)
         self.result_layout.addWidget(self.back_button, alignment=Qt.AlignBottom)
         
         self.result_widget.setLayout(self.result_layout)
         
-        # -----------------------
-        # Add widgets to the stacked layout
-        # -----------------------
+        # Add both views to stacked layout
         self.stacked_layout.addWidget(self.search_widget)
         self.stacked_layout.addWidget(self.result_widget)
         
@@ -84,21 +75,22 @@ class MainWindow(QWidget):
         """
         Update the status label in the search view with a given message.
         
-        :param message: Text to display in the status label
+        Args:
+            message: Text to display in the status label
         """
-        # ...existing code...
         self.status_label.setText(message)
     
     def display_stock_graph(self, plot_path):
         """
         Display the stock price chart in the result view.
         
-        :param plot_path: File path to the saved plot image
+        Args:
+            plot_path: File path to the saved plot image
         """
-        # Load the plot image and scale it to fit the result view
+        # Load and scale the image for display
         pixmap = QPixmap(plot_path)
 
-        # Scale the image to fit nicely in the result widget
+        # Scale the image to fit nicely in the result view
         scaled_pixmap = pixmap.scaled(
             self.result_size.width() - 40, 
             self.result_size.height() - 100, 
@@ -107,16 +99,15 @@ class MainWindow(QWidget):
         )
         self.result_label.setPixmap(scaled_pixmap)
 
-        # Resize the window and switch to the result view
+        # Resize window and switch to result view
         self.resize(self.result_size)
-        # Switch to the result screen
         self.stacked_layout.setCurrentWidget(self.result_widget)
 
     def go_back_to_search(self):
         """
         Clear the result view and return to the search view.
         """
-        # Reset the status label, clear the input field, and switch views
+        # Reset UI elements and switch back to search
         self.status_label.setText("")
         self.search_entry.clear()
         self.result_label.clear()
