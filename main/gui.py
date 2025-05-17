@@ -111,11 +111,8 @@ class MainWindow(QWidget):
         self.stacked_layout.setCurrentWidget(self.result_widget)
 
     def go_back_to_search(self):
-        """
-        Clears status messages, resets the search bar, 
-        and navigates back to the search screen.
-        """
         self.status_label.setText("")
         self.search_entry.clear()
+        self.result_label.clear()
         self.stacked_layout.setCurrentWidget(self.search_widget)
         self.resize(self.base_size)
