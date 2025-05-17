@@ -4,13 +4,15 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QSize
 
+# Import necessary PyQt5 modules for GUI components
+
 class MainWindow(QWidget):
     """
-    Main window for a simple stock prediction app.
-    Allows users to input a ticker symbol and then displays
-    the resulting stock price plot on a new screen.
+    Main window for the stock prediction app. Provides a search view for inputting a ticker symbol
+    and a result view for displaying the stock price plot.
     """
     def __init__(self):
+        # Initialize the main window and set up the UI
         super().__init__()
         # Define default window sizes for the input view and result view
         self.base_size = QSize(400, 50)
@@ -20,15 +22,13 @@ class MainWindow(QWidget):
       
     def initUI(self):
         """
-        Sets up the primary UI layout, including:
-        - A stacked layout that toggles between the search view and the result view
-        - Search view: input box + search button + status label
-        - Result view: label displaying the plot + back button
+        Set up the primary UI layout, including the search view and result view.
         """
+        # Configure the window title and initial size
         self.setWindowTitle("Stock Predictor")
         self.resize(self.base_size)  # Start with base size
         
-        # Create a stacked layout to switch between pages
+        # Create a stacked layout to toggle between search and result views
         self.stacked_layout = QStackedLayout()
         
         # -----------------------
@@ -82,18 +82,20 @@ class MainWindow(QWidget):
     
     def display_status_message(self, message):
         """
-        Update the status label in the search view.
+        Update the status label in the search view with a given message.
         
         :param message: Text to display in the status label
         """
+        # ...existing code...
         self.status_label.setText(message)
     
     def display_stock_graph(self, plot_path):
         """
-        Displays the stock price chart (as a PNG or similar image) in the result view.
+        Display the stock price chart in the result view.
         
         :param plot_path: File path to the saved plot image
         """
+        # Load the plot image and scale it to fit the result view
         pixmap = QPixmap(plot_path)
 
         # Scale the image to fit nicely in the result widget
@@ -104,13 +106,17 @@ class MainWindow(QWidget):
             Qt.SmoothTransformation
         )
         self.result_label.setPixmap(scaled_pixmap)
-        
-        # Resize the window to accommodate the result view
+
+        # Resize the window and switch to the result view
         self.resize(self.result_size)
         # Switch to the result screen
         self.stacked_layout.setCurrentWidget(self.result_widget)
 
     def go_back_to_search(self):
+        """
+        Clear the result view and return to the search view.
+        """
+        # Reset the status label, clear the input field, and switch views
         self.status_label.setText("")
         self.search_entry.clear()
         self.result_label.clear()

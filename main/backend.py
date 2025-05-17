@@ -1,3 +1,4 @@
+# Import necessary libraries for data manipulation, visualization, and machine learning
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,6 +24,7 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 
+# Configuration class to store hyperparameters and settings for the model
 class Config:
     # sequence & forecast lengths
     time_step: int = 50          # length of input window
@@ -39,24 +41,28 @@ class Config:
     valid_split: float = 0.15
     random_seed: int = 42
 
+# Extended configuration for cross-validation
 class CVConfig(Config):
+    # Number of splits for time series cross-validation
     n_splits: int = 5
 
+# Set random seeds for reproducibility
 np.random.seed(Config.random_seed)
 tf.random.set_seed(Config.random_seed)
 
-# Helper function
-
+# Helper function to encode cyclical features like day of the week or month
 def _cyclical_encode(series: pd.Series, period: int) -> Tuple[pd.Series, pd.Series]:
-    """Return sine & cosine encodings of a cyclical integer series."""
+    # Convert the series into radians for sine and cosine transformations
+    # This helps encode cyclical patterns (e.g., days of the week, months of the year)
     radians = 2 * np.pi * series / period
     return np.sin(radians), np.cos(radians)
 
-
-# Data loading 
-
+# Function to load stock data and engineer features
 def load_stock_data(ticker: str, start: str = "2010-01-01") -> pd.DataFrame:
-    """Fetch daily OHLCV data from Stooq and engineer additional features."""
+    # Fetch data from Stooq and add technical indicators, market context, and calendar encodings
+    # Technical indicators include moving averages, RSI, MACD, Bollinger Bands, etc.
+    # Market context includes S&P 500 data for correlation analysis
+    # Calendar encodings help capture seasonality effects
     end = pd.Timestamp.today().strftime("%Y-%m-%d")
 
     # --- primary security ---
@@ -107,23 +113,30 @@ def load_stock_data(ticker: str, start: str = "2010-01-01") -> pd.DataFrame:
     ]
     return df[feature_cols]
 
-# Pre‑processing
-
+# Function to preprocess data by scaling it
 def preprocess_data(data: pd.DataFrame, cfg: Config) -> Tuple[np.ndarray, MinMaxScaler]:
+    # Scale the data using MinMaxScaler to normalize features between 0 and 1
+    # This ensures that all features contribute equally to the model training
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(data.values)
     return scaled, scaler
 
+# Helper function to create sequences for time series forecasting
 def _make_sequences(scaled: np.ndarray, cfg: Config) -> Tuple[np.ndarray, np.ndarray]:
+    # Generate input-output pairs for the model
+    # Each input sequence has a fixed length (time_step), and the output is the forecast horizon
+    # This is crucial for training the model to predict future stock prices
     X, y = [], []
     for i in range(cfg.time_step, len(scaled) - cfg.future_steps + 1):
         X.append(scaled[i - cfg.time_step : i])
         y.append(scaled[i : i + cfg.future_steps, 3])  # Close column index 3
     return np.asarray(X), np.asarray(y)
 
-# Cross‑validation helper
-
+# Function to perform time series cross-validation
 def time_series_cv(data: np.ndarray, cv_cfg: CVConfig) -> List[Tuple[np.ndarray, np.ndarray]]:
+    # Split data into training and validation sets for cross-validation
+    # Ensures that the model is evaluated on unseen data to prevent overfitting
+    # TimeSeriesSplit is used to maintain the temporal order of the data
     splitter = TimeSeriesSplit(n_splits=cv_cfg.n_splits)
     folds: List[Tuple[np.ndarray, np.ndarray]] = []
     for train_idx, val_idx in splitter.split(data):
@@ -132,9 +145,12 @@ def time_series_cv(data: np.ndarray, cv_cfg: CVConfig) -> List[Tuple[np.ndarray,
         folds.append((data[train_idx], data[val_idx]))
     return folds
 
-# Model definition – CNN + Bi‑LSTM + Attention
-
+# Function to define the CNN + Bi-LSTM + Attention model
 def _build_model(n_features: int, cfg: Config) -> Model:
+    # Build a deep learning model with convolutional, LSTM, and attention layers
+    # CNN layers extract local patterns in the time series data
+    # Bi-LSTM layers capture long-term dependencies in both forward and backward directions
+    # Attention mechanism helps the model focus on the most relevant parts of the input sequence
     inp = Input(shape=(cfg.time_step, n_features))
     x = Conv1D(cfg.cnn_filters, cfg.kernel_size, activation="relu", padding="same")(inp)
     x = MaxPooling1D(2)(x)
@@ -151,9 +167,11 @@ def _build_model(n_features: int, cfg: Config) -> Model:
     model.compile(optimizer=tf.keras.optimizers.Adam(cfg.learning_rate, clipnorm=0.5), loss="huber")
     return model
 
-# Training utilities
-
+# Function to train the model on the data
 def train_model(scaled: np.ndarray, cfg: Config) -> Tuple[Model, float]:
+    # Train the model and return the trained model and validation loss
+    # EarlyStopping halts training when validation loss stops improving
+    # ReduceLROnPlateau reduces the learning rate when the model plateaus
     X, y = _make_sequences(scaled, cfg)
     model = _build_model(scaled.shape[1], cfg)
     hist = model.fit(
@@ -173,6 +191,10 @@ def train_model(scaled: np.ndarray, cfg: Config) -> Tuple[Model, float]:
 # Prediction helper
 
 def predict_future(model: Model, last_sequence: np.ndarray, scaler: MinMaxScaler, cfg: Config) -> np.ndarray:
+    # Generate future predictions using the model and adjust for mean reversion and momentum
+    # Mean reversion assumes that prices tend to revert to their historical mean
+    # Momentum captures the tendency of prices to continue moving in the same direction
+    # Random noise is added to simulate market volatility
     seq = last_sequence.copy()
     preds_scaled = np.zeros(cfg.future_steps)
 
@@ -209,6 +231,8 @@ def predict_future(model: Model, last_sequence: np.ndarray, scaler: MinMaxScaler
 # High‑level forecasting pipeline
 
 def forecast_stock(ticker: str, cfg: Config = Config()) -> Tuple[pd.DataFrame, np.ndarray]:
+    # Load data, preprocess it, train the model, and make predictions
+    # This function orchestrates the entire pipeline from data loading to forecasting
     data = load_stock_data(ticker)
     scaled, scaler = preprocess_data(data, cfg)
     model, _ = train_model(scaled, cfg)
@@ -219,6 +243,9 @@ def forecast_stock(ticker: str, cfg: Config = Config()) -> Tuple[pd.DataFrame, n
 # Plotting
 
 def plot_forecast(data: pd.DataFrame, preds: np.ndarray, cfg: Config, save_path: str = "forecast.png") -> str:
+    # Create a plot of historical and forecasted stock prices
+    # Historical prices are shown in blue, and forecasted prices are shown in red
+    # The plot is saved as an image file for easy sharing and visualization
     plt.style.use("fivethirtyeight")
     fig, ax = plt.subplots(figsize=(10, 4))
     hist = data["Close"].tail(60)
