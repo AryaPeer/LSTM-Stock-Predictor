@@ -33,7 +33,7 @@ class Config:
     cnn_filters: int = 32        # Number of CNN filters
     kernel_size: int = 3         # Size of CNN kernel
     lstm_units: int = 128        # Units in first LSTM layer
-    dropout_rate: float = 0.3    # Dropout for regularization
+    dropout_rate: float = 0.2    # Dropout for regularization
     
     # Training parameters
     batch_size: int = 64
