@@ -14,3 +14,8 @@ To get started, follow these steps:
     ```bash
     bash run_app.sh
     ```
+
+### Inspired by: 
+Zhang, J., Ye, L., & Lai, Y. (2023) *Stock Price Prediction Using
+CNN‑BiLSTM‑Attention Model*, *Mathematics, 11*(9), 1985.
+https://doi.org/10.3390/math11091985
