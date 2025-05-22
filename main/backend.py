@@ -3,11 +3,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import ta
 import pandas_datareader.data as web
+import tensorflow as tf
+
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import TimeSeriesSplit
 from typing import List, Tuple
-
-import tensorflow as tf
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
@@ -75,38 +75,69 @@ def load_stock_data(ticker: str, start: str = "2010-01-01") -> pd.DataFrame:
     df = df.join(sp500, how="left")
 
     # Calculate technical indicators
+
+    # Moving averages
     df["MA_20"]   = ta.trend.sma_indicator(df["Close"], window=20)
     df["EMA_20"]  = ta.trend.ema_indicator(df["Close"], window=20)
     df["MA_50"]   = ta.trend.sma_indicator(df["Close"], window=50)
     df["MA_100"]  = ta.trend.sma_indicator(df["Close"], window=100)
+
+    # Relative Strength Index
     df["RSI_14"]  = ta.momentum.rsi(df["Close"], window=14)
+    # Moving Average Convergence Divergence
     df["MACD"]    = ta.trend.macd(df["Close"])
-    bb             = ta.volatility.BollingerBands(df["Close"], window=20)
+
+    # Bollinger Bands
+    bb            = ta.volatility.BollingerBands(df["Close"], window=20)
     df["BB_High"] = bb.bollinger_hband()
     df["BB_Low"]  = bb.bollinger_lband()
+
+    # Stochastic Oscillator
     df["Stoch"]   = ta.momentum.stoch(df["High"], df["Low"], df["Close"], window=14, smooth_window=3)
+    # Average True Range
     df["ATR"]     = ta.volatility.average_true_range(df["High"], df["Low"], df["Close"], window=14)
+    # On Balance Volume
     df["OBV"]     = ta.volume.on_balance_volume(df["Close"], df["Volume"])
+    # Money Flow Index
     df["MFI"]     = ta.volume.money_flow_index(df["High"], df["Low"], df["Close"], df["Volume"], window=14)
 
     # Calculate returns and volatility
-    df["Return"]        = df["Close"].pct_change()
+    df["Return"] = df["Close"].pct_change()
     df["Volatility_20"] = df["Return"].rolling(20).std()
 
     # Add calendar features with cyclical encoding
-    df["DayOfWeek"]               = df.index.dayofweek
-    df["Month"]                   = df.index.month
+    df["DayOfWeek"] = df.index.dayofweek
+    df["Month"] = df.index.month
     df["DayOfWeek_sin"], df["DayOfWeek_cos"] = _cyclical_encode(df["DayOfWeek"], 7)
-    df["Month_sin"],    df["Month_cos"]      = _cyclical_encode(df["Month"], 12)
+    df["Month_sin"],    df["Month_cos"] = _cyclical_encode(df["Month"], 12)
 
     # Clean data and select relevant features
     df = df.dropna()
     feature_cols = [
-        "Open", "High", "Low", "Close", "Volume",
-        "MA_20", "EMA_20", "MA_50", "MA_100", "RSI_14", "MACD",
-        "BB_High", "BB_Low", "Stoch", "ATR", "OBV", "MFI",
-        "Return", "Volatility_20", "SP500_Close",
-        "DayOfWeek_sin", "DayOfWeek_cos", "Month_sin", "Month_cos",
+        "Open", 
+        "High", 
+        "Low", 
+        "Close", 
+        "Volume",
+        "MA_20", 
+        "EMA_20", 
+        "MA_50", 
+        "MA_100", 
+        "RSI_14", 
+        "MACD",
+        "BB_High", 
+        "BB_Low", 
+        "Stoch", 
+        "ATR", 
+        "OBV", 
+        "MFI",
+        "Return", 
+        "Volatility_20", 
+        "SP500_Close",
+        "DayOfWeek_sin", 
+        "DayOfWeek_cos", 
+        "Month_sin", 
+        "Month_cos",
     ]
     return df[feature_cols]
 
@@ -178,6 +209,7 @@ def train_model(scaled: np.ndarray, cfg: Config) -> Tuple[Model, float]:
         batch_size=cfg.batch_size,
         epochs=cfg.epochs,
         callbacks=[
+            #Reduce learning rate on plateau + Early stopping
             EarlyStopping(patience=10, restore_best_weights=True, monitor="val_loss"),
             ReduceLROnPlateau(patience=5, factor=0.5, monitor="val_loss"),
         ],
@@ -211,8 +243,11 @@ def predict_future(model: Model, last_sequence: np.ndarray, scaler: MinMaxScaler
         mean_rev = mean_rev_strength * (historical_mean - cum_return)
         momentum = 0.05 * (preds_scaled[i-1] - preds_scaled[i-2]) if i > 1 else 0.0
         
+        # Calculate daily return using random movement, mean reversion, and momentum
         daily_ret = rand + mean_rev + momentum
         cum_return += daily_ret
+        
+        # Apply daily return to base prediction
         adj_scaled = base_scaled * (1 + daily_ret)
         preds_scaled[i] = adj_scaled
         
