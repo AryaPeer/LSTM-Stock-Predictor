@@ -38,7 +38,7 @@ pandas-datareader==0.10.0
 peewee==3.17.7
 pillow==11.0.0
 platformdirs==4.3.6
-protobuf==5.28.3
+protobuf==5.29.5
 Pygments==2.18.0
 pyparsing==3.2.0
 PyQt5==5.15.11
