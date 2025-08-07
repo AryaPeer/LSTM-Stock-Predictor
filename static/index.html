@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Stock Predictor - Advanced LSTM Analysis</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <h1 class="logo">AI Stock Predictor</h1>
+            <p class="tagline">Powered by CNN-BiLSTM with Attention</p>
+        </div>
+    </nav>
+
+    <main class="container">
+        <section class="search-section">
+            <div class="search-box">
+                <input type="text" id="tickerInput" placeholder="Enter stock ticker (e.g., AAPL, MSFT)" />
+                <button id="predictBtn" onclick="analyzeStock()">Analyze</button>
+            </div>
+            <div id="loadingIndicator" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Training AI model and generating predictions...</p>
+            </div>
+        </section>
+
+        <div id="errorMessage" class="error-message hidden"></div>
+
+        <div id="resultsSection" class="results-section hidden">
+            <div class="company-header">
+                <h2 id="companyName"></h2>
+                <div class="current-price">
+                    <span class="label">Current Price:</span>
+                    <span id="currentPrice" class="price"></span>
+                </div>
+            </div>
+
+            <div class="dashboard">
+                <div class="card chart-card">
+                    <h3>Price Prediction</h3>
+                    <canvas id="predictionChart"></canvas>
+                    <div class="model-accuracy">
+                        <span>Model Confidence: </span>
+                        <span id="modelAccuracy"></span>
+                    </div>
+                </div>
+
+                <div class="card metrics-card">
+                    <h3>Key Metrics</h3>
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <span class="metric-label">Market Cap</span>
+                            <span class="metric-value" id="marketCap">-</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">P/E Ratio</span>
+                            <span class="metric-value" id="peRatio">-</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Dividend Yield</span>
+                            <span class="metric-value" id="dividendYield">-</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Beta</span>
+                            <span class="metric-value" id="beta">-</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">52W High</span>
+                            <span class="metric-value" id="high52">-</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">52W Low</span>
+                            <span class="metric-value" id="low52">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card technical-card">
+                    <h3>Technical Indicators</h3>
+                    <div class="indicators-grid">
+                        <div class="indicator">
+                            <span class="indicator-label">RSI (14)</span>
+                            <div class="indicator-bar">
+                                <div id="rsiBar" class="indicator-fill"></div>
+                            </div>
+                            <span class="indicator-value" id="rsiValue">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Stochastic</span>
+                            <div class="indicator-bar">
+                                <div id="stochBar" class="indicator-fill"></div>
+                            </div>
+                            <span class="indicator-value" id="stochValue">-</span>
+                        </div>
+                    </div>
+                    <div class="ma-values">
+                        <div class="ma-item">
+                            <span>MA(20):</span>
+                            <span id="ma20">-</span>
+                        </div>
+                        <div class="ma-item">
+                            <span>MA(50):</span>
+                            <span id="ma50">-</span>
+                        </div>
+                        <div class="ma-item">
+                            <span>MA(100):</span>
+                            <span id="ma100">-</span>
+                        </div>
+                    </div>
+                    <div id="tradingSignals" class="trading-signals"></div>
+                </div>
+
+                <div class="card news-card">
+                    <h3>Latest News & Sentiment</h3>
+                    <div id="sentimentSummary" class="sentiment-summary"></div>
+                    <div id="newsList" class="news-list"></div>
+                </div>
+
+                <div class="card prediction-table">
+                    <h3>10-Day Forecast</h3>
+                    <table id="predictionTable">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Predicted Price</th>
+                                <th>Change</th>
+                            </tr>
+                        </thead>
+                        <tbody id="predictionTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <p>Disclaimer: This tool is for educational purposes only. Not financial advice.</p>
+        <p>Model: CNN-BiLSTM with Attention | Data: Yahoo Finance</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
